@@ -1,0 +1,26 @@
+# 1. Ignorer absolument tout par défaut
+*
+*.*
+
+# 2. Autoriser la traversée de tous les dossiers (nécessaire pour trouver les fichiers .kt profonds)
+!*/
+
+# 3. Autoriser EXCLUSIVEMENT les fichiers Kotlin
+!*.kt
+!*.kts
+
+# 4. Autoriser les fichiers indispensables au fonctionnement de Git/GitHub
+!.gitignore
+!README.md
+
+# 5. Sécurité : Ignorer explicitement les fichiers sensibles et temporaires même s'ils finissent par .kt/.kts (peu probable mais prudent)
+.gradle/
+.idea/
+.kotlin/
+build/
+app/build/
+local.properties
+*.iml
+captures/
+.DS_Store
+Thumbs.db
