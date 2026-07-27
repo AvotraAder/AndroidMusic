@@ -10,6 +10,8 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.annotation.OptIn
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -28,8 +30,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
@@ -69,6 +74,8 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.media.audiofx.Visualizer
+import androidx.media3.session.MediaController as Media3Controller
 
 enum class MediaType { AUDIO, VIDEO }
 enum class SortOrder { NAME, DATE, SIZE, ARTIST }
@@ -96,6 +103,7 @@ fun MusicPlayerView(currentLanguage: String, username: String, onMediaPlayed: (M
     } else {
         permissions.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
     }
+    permissions.add(android.Manifest.permission.RECORD_AUDIO)
     
     val permissionState = rememberMultiplePermissionsState(permissions)
 
@@ -138,14 +146,15 @@ fun MediaControllerWrapper(context: Context, currentLanguage: String, username: 
     }
 
     controller?.let {
-        MediaTabs(context, currentLanguage, it, onMediaPlayed)
+        val audioSessionId = it.sessionExtras.getInt("AUDIO_SESSION_ID", 0)
+        MediaTabs(context, currentLanguage, it, audioSessionId, onMediaPlayed)
     } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         CircularProgressIndicator()
     }
 }
 
 @Composable
-fun MediaTabs(context: Context, currentLanguage: String, player: Player, onMediaPlayed: (MediaItem) -> Unit) {
+fun MediaTabs(context: Context, currentLanguage: String, player: Player, audioSessionId: Int, onMediaPlayed: (MediaItem) -> Unit) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var sortOrder by remember { mutableStateOf(SortOrder.NAME) }
     var isAscending by remember { mutableStateOf(true) }
@@ -263,14 +272,14 @@ fun MediaTabs(context: Context, currentLanguage: String, player: Player, onMedia
         }
         
         key(selectedTab) {
-            MediaList(filteredItems, if (selectedTab == 0) MediaType.AUDIO else MediaType.VIDEO, emptyText, player, currentLanguage, sortOrder, onMediaPlayed)
+            MediaList(filteredItems, if (selectedTab == 0) MediaType.AUDIO else MediaType.VIDEO, emptyText, player, audioSessionId, currentLanguage, sortOrder, onMediaPlayed)
         }
     }
 }
 
 @OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player: Player, currentLanguage: String, sortOrder: SortOrder, onMediaPlayed: (MediaItem) -> Unit) {
+fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player: Player, audioSessionId: Int, currentLanguage: String, sortOrder: SortOrder, onMediaPlayed: (MediaItem) -> Unit) {
     val context = LocalContext.current
     var currentIndex by remember { mutableIntStateOf(-1) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -319,6 +328,42 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
 
         onDispose {
             player.removeListener(listener)
+        }
+    }
+
+    val visualizerData = remember { mutableStateOf(FloatArray(40) { 0f }) }
+
+    DisposableEffect(audioSessionId, isPlaying) {
+        if (audioSessionId <= 0 || !isPlaying) {
+            visualizerData.value = FloatArray(40) { 0f }
+            return@DisposableEffect onDispose {}
+        }
+        
+        val visualizer = try {
+            Visualizer(audioSessionId).apply {
+                captureSize = Visualizer.getCaptureSizeRange()[1]
+                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
+                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+                        if (fft != null) {
+                            val newData = FloatArray(40)
+                            for (i in 0 until 40) {
+                                val rf = fft[i * 2].toInt()
+                                val ifrag = fft[i * 2 + 1].toInt()
+                                val mag = Math.sqrt((rf * rf + ifrag * ifrag).toDouble()).toFloat()
+                                newData[i] = mag / 30f // Scaling for UI
+                            }
+                            visualizerData.value = newData
+                        }
+                    }
+                }, Visualizer.getMaxCaptureRate() / 2, false, true)
+                enabled = true
+            }
+        } catch (e: Exception) { null }
+
+        onDispose {
+            visualizer?.enabled = false
+            try { visualizer?.release() } catch (e: Exception) {}
         }
     }
 
@@ -421,8 +466,8 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                             val scrollbarHeightFraction = (visibleItemsCount.toFloat() / totalItems).coerceIn(0.1f, 1f)
                             val scrollbarOffsetFraction = (firstVisible.toFloat() / totalItems)
                             
-                            val thumbHeight = containerHeight * scrollbarHeightFraction
-                            val thumbOffset = containerHeight * scrollbarOffsetFraction
+                            val thumbHeight = containerHeight * (visibleItemsCount.toFloat() / totalItems).coerceIn(0.1f, 1f)
+                            val thumbOffset = containerHeight * (firstVisible.toFloat() / totalItems)
 
                             Box(
                                 modifier = Modifier
@@ -507,6 +552,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                 isPlaying = isPlaying,
                 playbackSpeed = playbackSpeed,
                 volume = volume,
+                visualizerData = visualizerData.value,
                 shuffleMode = shuffleMode,
                 repeatMode = repeatMode,
                 onTogglePlay = { if (player.isPlaying) player.pause() else player.play() },
@@ -552,6 +598,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
             isPlaying = isPlaying,
             playbackSpeed = playbackSpeed,
             volume = volume,
+            visualizerData = visualizerData.value,
             onVolumeChange = {
                 volume = it
                 player.volume = it
@@ -684,6 +731,7 @@ fun NowPlayingDialog(
     isPlaying: Boolean,
     playbackSpeed: Float,
     volume: Float,
+    visualizerData: FloatArray,
     onVolumeChange: (Float) -> Unit,
     shuffleMode: Boolean,
     repeatMode: Int,
@@ -746,20 +794,48 @@ fun NowPlayingDialog(
                 } else {
                     Spacer(modifier = Modifier.height(48.dp))
 
-                    // Large Artwork Placeholder
-                    Card(
-                        modifier = Modifier.size(280.dp),
-                        shape = MaterialTheme.shapes.extraLarge,
-                        elevation = CardDefaults.cardElevation(8.dp)
-                    ) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (item.type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
-                                contentDescription = null,
-                                modifier = Modifier.size(120.dp),
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                            )
+                    // Large Artwork Placeholder with Circular Visualizer
+                    Box(modifier = Modifier.size(320.dp), contentAlignment = Alignment.Center) {
+                        // Rotation animation for the circular icon and visualizer
+                        val infiniteTransition = rememberInfiniteTransition(label = "rotation")
+                        val rotation by infiniteTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(15000, easing = LinearEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rotation"
+                        )
+
+                        Surface(
+                            modifier = Modifier
+                                .size(240.dp)
+                                .graphicsLayer {
+                                    rotationZ = if (isPlaying) rotation else 0f
+                                },
+                            shape = CircleShape, // Perfectly round
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            tonalElevation = 8.dp,
+                            border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (item.type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(100.dp),
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                )
+                            }
                         }
+
+                        // Move visualizer after surface to be in front
+                        CircularVisualizer(
+                            isPlaying = isPlaying,
+                            visualizerData = visualizerData,
+                            rotation = if (isPlaying) rotation else 0f,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(48.dp))
@@ -782,11 +858,25 @@ fun NowPlayingDialog(
                     Spacer(modifier = Modifier.weight(1f))
 
                     // Progress Bar
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Visualiseur de Basses style "Papillon" (Bowtie) centré
+                        BassVisualizer(
+                            isPlaying = isPlaying, 
+                            volume = volume,
+                            visualizerData = visualizerData,
+                            modifier = Modifier
+                                .fillMaxWidth(0.8f) // 80% width
+                                .height(40.dp)
+                                .padding(bottom = 8.dp)
+                        )
+
                         BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(32.dp)
+                                .height(24.dp)
                                 .pointerInput(duration) {
                                     if (duration > 0) {
                                         detectDragGestures { change, _ ->
@@ -1185,6 +1275,131 @@ fun formatTime(ms: Long): String {
     return "%02d:%02d".format(minutes, seconds)
 }
 
+@Composable
+fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation: Float = 0f, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val colorBass = MaterialTheme.colorScheme.primary // Kick/Basse
+    val colorMid = MaterialTheme.colorScheme.secondary // Clap/Vocal
+    val colorHigh = MaterialTheme.colorScheme.tertiary // Cymbals/Aigus
+    
+    Canvas(modifier = modifier) {
+        val center = Offset(size.width / 2, size.height / 2)
+        val radius = size.minDimension / 2 * 0.70f
+        val barCount = 80 // Doubled number of bars for a denser look
+        val angleStep = 360f / barCount
+
+        for (i in 0 until barCount) {
+            // Interpolate data for more bars
+            val dataIndex = (i * visualizerData.size / barCount)
+            val amplitude = if (isPlaying) visualizerData[dataIndex] else 0f
+            
+            // Distinguer les types de sons par couleur
+            val barColor = when {
+                dataIndex < 6 -> colorBass     
+                dataIndex < 16 -> colorMid     
+                else -> colorHigh      
+            }
+            
+            val barHeight = (amplitude * 80f).coerceIn(4f, 120f)
+            val angle = i * angleStep - 90f + rotation
+            val angleRad = Math.toRadians(angle.toDouble()).toFloat()
+            
+            val startX = center.x + Math.cos(angleRad.toDouble()).toFloat() * radius
+            val startY = center.y + Math.sin(angleRad.toDouble()).toFloat() * radius
+            
+            val endX = center.x + Math.cos(angleRad.toDouble()).toFloat() * (radius + barHeight)
+            val endY = center.y + Math.sin(angleRad.toDouble()).toFloat() * (radius + barHeight)
+            
+            drawLine(
+                color = barColor,
+                start = Offset(startX, startY),
+                end = Offset(endX, endY),
+                strokeWidth = 2.dp.toPx(), // Thinner bars for more density
+                cap = StrokeCap.Round
+            )
+
+            if (dataIndex < 6 && amplitude > 0.8f) {
+                drawCircle(
+                    color = colorBass.copy(alpha = 0.05f * amplitude),
+                    radius = radius + barHeight + 15f,
+                    center = center,
+                    style = Stroke(width = 4.dp.toPx())
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray, modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition(label = "bass")
+    // Use only the first 12-15 bins for Bass/Kick
+    val bassBins = visualizerData.take(15)
+    val barCount = 40
+    
+    val maxAmplitude = bassBins.maxOrNull() ?: 0f
+    val animatedPulse by animateFloatAsState(
+        targetValue = if (isPlaying) maxAmplitude else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+    )
+
+    Row(
+        modifier = modifier.graphicsLayer {
+            val s = 1f + (animatedPulse * 0.04f * volume)
+            scaleX = s
+            scaleY = s
+        },
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically // Design symétrique haut/bas
+    ) {
+        repeat(barCount) { i ->
+            // Logic for the "Butterfly" / "Bowtie" shape from the image
+            // Center is at barCount / 2. 
+            // Normalized distance from center (0 at middle, 1 at edges)
+            val distFromCenter = Math.abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
+            
+            // The bins are mirrored or mapped
+            val binIndex = (i % bassBins.size)
+            val amplitude = bassBins[binIndex]
+            
+            val animatedHeight by animateFloatAsState(
+                targetValue = if (isPlaying) amplitude else 0f,
+                animationSpec = tween(durationMillis = 100)
+            )
+            
+            val jitter by infiniteTransition.animateFloat(
+                initialValue = 0.8f,
+                targetValue = 1.2f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween((150..400).random(), easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "jitter_$i"
+            )
+            
+            // Shape factor: Taller on sides, shorter in middle
+            val shapeFactor = 0.3f + (distFromCenter * 0.7f)
+            
+            val intensity = if (isPlaying) {
+                ((animatedHeight * 1.5f) + 0.2f) * volume * jitter * shapeFactor
+            } else 0f
+
+            val finalHeight = (4 + (32 * intensity)).coerceIn(4f, 40f).dp
+            val colorAlpha = if (isPlaying) (0.4f + (0.6f * intensity)).coerceIn(0.1f, 1f) else 0.1f
+            
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(finalHeight)
+                    .background(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = colorAlpha),
+                        shape = CircleShape
+                    )
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdvancedBottomPlayer(
@@ -1192,6 +1407,7 @@ fun AdvancedBottomPlayer(
     isPlaying: Boolean,
     playbackSpeed: Float,
     volume: Float,
+    visualizerData: FloatArray,
     shuffleMode: Boolean,
     repeatMode: Int,
     onTogglePlay: () -> Unit,

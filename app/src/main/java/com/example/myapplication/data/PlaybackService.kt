@@ -14,7 +14,12 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val player = ExoPlayer.Builder(this).build()
-        mediaSession = MediaSession.Builder(this, player).build()
+        val sessionExtras = android.os.Bundle().apply {
+            putInt("AUDIO_SESSION_ID", player.audioSessionId)
+        }
+        mediaSession = MediaSession.Builder(this, player)
+            .setSessionExtras(sessionExtras)
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
