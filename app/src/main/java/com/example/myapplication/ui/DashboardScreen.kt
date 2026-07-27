@@ -64,7 +64,7 @@ fun DashboardScreen(
             "new_password" to "Nouveau mot de passe",
             "save" to "Sauvegarder les modifications",
             "help_content" to "Besoin d'aide ? Consultez notre documentation ou contactez le support.",
-            "contact_content" to "Email: andriniainavotraader@gmail.com\nTéléphone: +261 33 79 210 96\nGitHub: https://github.com/AvotraAder"
+            "contact_content" to "Email: andriniainaavotraader@gmail.com\nTéléphone: +261 33 79 210 96\nGitHub: https://github.com/AvotraAder"
         )
     } else {
         mapOf(
@@ -85,7 +85,7 @@ fun DashboardScreen(
             "new_password" to "New password",
             "save" to "Save changes",
             "help_content" to "Need help? Check our documentation or contact support.",
-            "contact_content" to "Email: andriniainavotraader@gmail.com\nPhone: +261 33 79 210 96\nGitHub: https://github.com/AvotraAder"
+            "contact_content" to "Email: andriniainaavotraader@gmail.com\nPhone: +261 33 79 210 96\nGitHub: https://github.com/AvotraAder"
         )
     }
 

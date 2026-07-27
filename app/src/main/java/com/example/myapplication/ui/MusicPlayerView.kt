@@ -76,6 +76,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.media.audiofx.Visualizer
 import androidx.media3.session.MediaController as Media3Controller
+import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.transform.RoundedCornersTransformation
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 
 enum class MediaType { AUDIO, VIDEO }
 enum class SortOrder { NAME, DATE, SIZE, ARTIST }
@@ -88,7 +95,8 @@ data class MediaItem(
     val uri: Uri,
     val type: MediaType,
     val dateAdded: Long,
-    val size: Long
+    val size: Long,
+    val albumArtUri: Uri? = null
 )
 
 @kotlin.OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
@@ -340,11 +348,11 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
         }
         
         val visualizer = try {
-            Visualizer(audioSessionId).apply {
-                captureSize = Visualizer.getCaptureSizeRange()[1]
-                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
-                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+            android.media.audiofx.Visualizer(audioSessionId).apply {
+                captureSize = android.media.audiofx.Visualizer.getCaptureSizeRange()[1]
+                setDataCaptureListener(object : android.media.audiofx.Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(v: android.media.audiofx.Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
+                    override fun onFftDataCapture(v: android.media.audiofx.Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         if (fft != null) {
                             val newData = FloatArray(40)
                             for (i in 0 until 40) {
@@ -356,7 +364,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                             visualizerData.value = newData
                         }
                     }
-                }, Visualizer.getMaxCaptureRate() / 2, false, true)
+                }, android.media.audiofx.Visualizer.getMaxCaptureRate() / 2, false, true)
                 enabled = true
             }
         } catch (e: Exception) { null }
@@ -414,11 +422,23 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                                 ) 
                             },
                             leadingContent = {
-                                Icon(
-                                    imageVector = if (type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
-                                    contentDescription = null,
-                                    tint = if (currentIndex == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
+                                if (type == MediaType.AUDIO && item.albumArtUri != null) {
+                                    AsyncImage(
+                                        model = item.albumArtUri,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Crop,
+                                        error = rememberVectorPainter(Icons.Default.MusicNote)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
+                                        contentDescription = null,
+                                        tint = if (currentIndex == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             },
                             trailingContent = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -637,6 +657,7 @@ fun createMedia3Item(item: MediaItem): Media3Item {
                 .setTitle(item.title)
                 .setArtist(item.artist)
                 .setAlbumTitle(item.album)
+                .setArtworkUri(item.albumArtUri) // Add artwork URI here
                 .build()
         )
         .build()
@@ -820,12 +841,22 @@ fun NowPlayingDialog(
                             border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
                         ) {
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (item.type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(100.dp),
-                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                                )
+                                if (item.type == MediaType.AUDIO && item.albumArtUri != null) {
+                                    AsyncImage(
+                                        model = item.albumArtUri,
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                        error = rememberVectorPainter(Icons.Default.MusicNote)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (item.type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(100.dp),
+                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                    )
+                                }
                             }
                         }
 
@@ -868,14 +899,14 @@ fun NowPlayingDialog(
                             volume = volume,
                             visualizerData = visualizerData,
                             modifier = Modifier
-                                .fillMaxWidth(0.8f) // 80% width
+                                .fillMaxWidth(0.6f) // 60% width
                                 .height(40.dp)
                                 .padding(bottom = 8.dp)
                         )
 
                         BoxWithConstraints(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .fillMaxWidth() // Back to full width for seek bar
                                 .height(24.dp)
                                 .pointerInput(duration) {
                                     if (duration > 0) {
@@ -1107,6 +1138,25 @@ class QueueAdapter(
             textTitle.text = mediaItem.mediaMetadata.title?.toString() ?: "Unknown"
             textArtist.text = mediaItem.mediaMetadata.artist?.toString() ?: "Unknown"
             
+            // Load Artwork
+            val artworkUri = mediaItem.mediaMetadata.artworkUri
+            if (artworkUri != null) {
+                imageArtwork.visibility = View.VISIBLE
+                // Use Coil to load image into XML ImageView
+                imageArtwork.context.imageLoader.enqueue(
+                    coil.request.ImageRequest.Builder(imageArtwork.context)
+                        .data(artworkUri)
+                        .target(imageArtwork)
+                        .crossfade(true)
+                        .transformations(RoundedCornersTransformation(16f)) // Match radius
+                        .error(android.R.drawable.ic_menu_report_image)
+                        .placeholder(android.R.drawable.ic_menu_report_image)
+                        .build()
+                )
+            } else {
+                imageArtwork.setImageResource(android.R.drawable.ic_menu_report_image)
+            }
+
             // Design Amélioré
             if (isCurrent) {
                 textTitle.setTextColor(android.graphics.Color.parseColor("#64B5F6")) // Dark Blue Accent
@@ -1278,9 +1328,6 @@ fun formatTime(ms: Long): String {
 @Composable
 fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation: Float = 0f, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val colorBass = MaterialTheme.colorScheme.primary // Kick/Basse
-    val colorMid = MaterialTheme.colorScheme.secondary // Clap/Vocal
-    val colorHigh = MaterialTheme.colorScheme.tertiary // Cymbals/Aigus
     
     Canvas(modifier = modifier) {
         val center = Offset(size.width / 2, size.height / 2)
@@ -1293,12 +1340,9 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
             val dataIndex = (i * visualizerData.size / barCount)
             val amplitude = if (isPlaying) visualizerData[dataIndex] else 0f
             
-            // Distinguer les types de sons par couleur
-            val barColor = when {
-                dataIndex < 6 -> colorBass     
-                dataIndex < 16 -> colorMid     
-                else -> colorHigh      
-            }
+            // RGB Hue based on position and rotation for a cycling effect
+            val hue = (i * angleStep + rotation) % 360f
+            val barColor = Color.hsv(hue, 0.8f, 1f)
             
             val barHeight = (amplitude * 80f).coerceIn(4f, 120f)
             val angle = i * angleStep - 90f + rotation
@@ -1314,16 +1358,17 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
                 color = barColor,
                 start = Offset(startX, startY),
                 end = Offset(endX, endY),
-                strokeWidth = 2.dp.toPx(), // Thinner bars for more density
+                strokeWidth = 2.dp.toPx(),
                 cap = StrokeCap.Round
             )
 
-            if (dataIndex < 6 && amplitude > 0.8f) {
+            // Extra glow for loud frequencies with matching RGB color
+            if (amplitude > 1.0f) {
                 drawCircle(
-                    color = colorBass.copy(alpha = 0.05f * amplitude),
-                    radius = radius + barHeight + 15f,
+                    color = barColor.copy(alpha = 0.03f * amplitude),
+                    radius = radius + barHeight + 10f,
                     center = center,
-                    style = Stroke(width = 4.dp.toPx())
+                    style = Stroke(width = 3.dp.toPx())
                 )
             }
         }
@@ -1333,7 +1378,7 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
 @Composable
 fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray, modifier: Modifier = Modifier) {
     val infiniteTransition = rememberInfiniteTransition(label = "bass")
-    // Use only the first 12-15 bins for Bass/Kick
+    // Use first few bins for Bass/Kick
     val bassBins = visualizerData.take(15)
     val barCount = 40
     
@@ -1345,47 +1390,37 @@ fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray
 
     Row(
         modifier = modifier.graphicsLayer {
-            val s = 1f + (animatedPulse * 0.04f * volume)
-            scaleX = s
-            scaleY = s
+            // Uniquement pulsation horizontale (gauche/droite)
+            scaleX = 1f + (animatedPulse * 0.15f * volume)
+            scaleY = 1f 
         },
         horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.CenterVertically // Design symétrique haut/bas
+        verticalAlignment = Alignment.CenterVertically
     ) {
         repeat(barCount) { i ->
-            // Logic for the "Butterfly" / "Bowtie" shape from the image
-            // Center is at barCount / 2. 
-            // Normalized distance from center (0 at middle, 1 at edges)
+            // Bowtie shape: Taller on sides, shorter in middle
             val distFromCenter = Math.abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
+            val shapeFactor = 0.3f + (distFromCenter * 0.7f)
             
-            // The bins are mirrored or mapped
-            val binIndex = (i % bassBins.size)
-            val amplitude = bassBins[binIndex]
-            
-            val animatedHeight by animateFloatAsState(
-                targetValue = if (isPlaying) amplitude else 0f,
-                animationSpec = tween(durationMillis = 100)
-            )
-            
+            // Fixed height logic based on shape, only subtle vibration
             val jitter by infiniteTransition.animateFloat(
-                initialValue = 0.8f,
-                targetValue = 1.2f,
+                initialValue = 0.95f,
+                targetValue = 1.05f,
                 animationSpec = infiniteRepeatable(
-                    animation = tween((150..400).random(), easing = LinearEasing),
+                    animation = tween((150..300).random(), easing = LinearEasing),
                     repeatMode = RepeatMode.Reverse
                 ),
                 label = "jitter_$i"
             )
             
-            // Shape factor: Taller on sides, shorter in middle
-            val shapeFactor = 0.3f + (distFromCenter * 0.7f)
-            
-            val intensity = if (isPlaying) {
-                ((animatedHeight * 1.5f) + 0.2f) * volume * jitter * shapeFactor
-            } else 0f
+            val baseHeight = 36.dp
+            val finalHeight = if (isPlaying) {
+                baseHeight * shapeFactor * jitter * (0.8f + (maxAmplitude * 0.2f))
+            } else {
+                baseHeight * shapeFactor * 0.5f
+            }
 
-            val finalHeight = (4 + (32 * intensity)).coerceIn(4f, 40f).dp
-            val colorAlpha = if (isPlaying) (0.4f + (0.6f * intensity)).coerceIn(0.1f, 1f) else 0.1f
+            val colorAlpha = if (isPlaying) (0.5f + (maxAmplitude * 0.5f)).coerceIn(0.2f, 1f) else 0.2f
             
             Box(
                 modifier = Modifier
@@ -1585,7 +1620,8 @@ fun getLocalMedia(context: Context): List<MediaItem> {
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DATE_ADDED,
-            MediaStore.Audio.Media.SIZE
+            MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.ALBUM_ID
         ),
         null, null, null
     )?.use { cursor ->
@@ -1595,15 +1631,20 @@ fun getLocalMedia(context: Context): List<MediaItem> {
         val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
         val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
         val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+        val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
         
         while (cursor.moveToNext()) {
             val id = cursor.getLong(idCol)
+            val albumId = cursor.getLong(albumIdCol)
+            val albumArtUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+            
             mediaItems.add(MediaItem(
                 id, cursor.getString(titleCol), cursor.getString(artistCol), cursor.getString(albumCol),
                 ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id),
                 MediaType.AUDIO,
                 cursor.getLong(dateCol),
-                cursor.getLong(sizeCol)
+                cursor.getLong(sizeCol),
+                albumArtUri
             ))
         }
     }
