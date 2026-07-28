@@ -13,6 +13,7 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -298,6 +299,9 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
     var shuffleMode by remember { mutableStateOf(false) }
     var repeatMode by remember { mutableIntStateOf(Player.REPEAT_MODE_OFF) }
     var showNowPlaying by remember { mutableStateOf(false) }
+    
+    var currentPos by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -333,9 +337,18 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
         volume = player.volume
         shuffleMode = player.shuffleModeEnabled
         repeatMode = player.repeatMode
+        duration = player.duration.coerceAtLeast(0L)
 
         onDispose {
             player.removeListener(listener)
+        }
+    }
+
+    LaunchedEffect(isPlaying, currentIndex) {
+        while (isPlaying) {
+            currentPos = player.currentPosition
+            duration = player.duration.coerceAtLeast(0L)
+            delay(1000)
         }
     }
 
@@ -364,7 +377,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                             visualizerData.value = newData
                         }
                     }
-                }, android.media.audiofx.Visualizer.getMaxCaptureRate() / 2, false, true)
+                }, android.media.audiofx.Visualizer.getMaxCaptureRate() / 10, false, true) // Reduced frequency
                 enabled = true
             }
         } catch (e: Exception) { null }
@@ -570,6 +583,8 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
             AdvancedBottomPlayer(
                 item = items[currentIndex],
                 isPlaying = isPlaying,
+                currentPos = currentPos,
+                duration = duration,
                 playbackSpeed = playbackSpeed,
                 volume = volume,
                 visualizerData = visualizerData.value,
@@ -602,6 +617,11 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                             Triple(false, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Normal" else "Normal Mode")
                         }
                     }
+                    
+                    if (nextShuffle && !shuffleMode) {
+                        shuffleQueuePhysical(player)
+                    }
+
                     player.shuffleModeEnabled = nextShuffle
                     player.repeatMode = nextRepeat
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -989,6 +1009,11 @@ fun NowPlayingDialog(
                                     Triple(false, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Normal" else "Normal Mode")
                                 }
                             }
+                            
+                            if (nextShuffle && !shuffleMode) {
+                                shuffleQueuePhysical(player)
+                            }
+
                             player.shuffleModeEnabled = nextShuffle
                             player.repeatMode = nextRepeat
                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -1288,18 +1313,71 @@ fun QueueView(player: Player, currentLanguage: String) {
                     adapter.notifyDataSetChanged()
                 }
             }
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                if (!adapter.isDragging) {
+                    adapter.notifyDataSetChanged()
+                }
+            }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = if (currentLanguage == "FR") "File d'attente" else "Up Next",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(16.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (currentLanguage == "FR") "File d'attente" else "Up Next",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            
+            // Playback Mode Button in Queue
+            IconButton(onClick = {
+                val shuffleMode = player.shuffleModeEnabled
+                val repeatMode = player.repeatMode
+                
+                val (nextShuffle, nextRepeat, msg) = when {
+                    !shuffleMode && repeatMode == Player.REPEAT_MODE_OFF -> {
+                        Triple(true, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Aléatoire" else "Shuffle Mode")
+                    }
+                    shuffleMode -> {
+                        Triple(false, Player.REPEAT_MODE_ALL, if (currentLanguage == "FR") "Tout répéter" else "Loop All")
+                    }
+                    repeatMode == Player.REPEAT_MODE_ALL -> {
+                        Triple(false, Player.REPEAT_MODE_ONE, if (currentLanguage == "FR") "Répéter un titre" else "Repeat One")
+                    }
+                    else -> {
+                        Triple(false, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Normal" else "Normal Mode")
+                    }
+                }
+                
+                if (nextShuffle && !shuffleMode) {
+                    shuffleQueuePhysical(player)
+                }
+
+                player.shuffleModeEnabled = nextShuffle
+                player.repeatMode = nextRepeat
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }) {
+                val shuffleMode = player.shuffleModeEnabled
+                val repeatMode = player.repeatMode
+                val icon = when {
+                    shuffleMode -> Icons.Default.Shuffle
+                    repeatMode == Player.REPEAT_MODE_ALL -> Icons.Default.Repeat
+                    repeatMode == Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
+                    else -> Icons.Default.Repeat
+                }
+                Icon(
+                    imageVector = icon, 
+                    contentDescription = "Mode",
+                    tint = if (shuffleMode || repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                )
+            }
+        }
         
         AndroidView(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -1344,7 +1422,8 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
             val hue = (i * angleStep + rotation) % 360f
             val barColor = Color.hsv(hue, 0.8f, 1f)
             
-            val barHeight = (amplitude * 80f).coerceIn(4f, 120f)
+            // INCREASED MAX HEIGHT
+            val barHeight = (amplitude * 120f).coerceIn(4f, 160f)
             val angle = i * angleStep - 90f + rotation
             val angleRad = Math.toRadians(angle.toDouble()).toFloat()
             
@@ -1362,10 +1441,10 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
                 cap = StrokeCap.Round
             )
 
-            // Extra glow for loud frequencies with matching RGB color
+            // INCREASED GLOW INTENSITY
             if (amplitude > 1.0f) {
                 drawCircle(
-                    color = barColor.copy(alpha = 0.03f * amplitude),
+                    color = barColor.copy(alpha = 0.05f * amplitude),
                     radius = radius + barHeight + 10f,
                     center = center,
                     style = Stroke(width = 3.dp.toPx())
@@ -1378,58 +1457,77 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
 @Composable
 fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray, modifier: Modifier = Modifier) {
     val infiniteTransition = rememberInfiniteTransition(label = "bass")
-    // Use first few bins for Bass/Kick
-    val bassBins = visualizerData.take(15)
     val barCount = 40
     
-    val maxAmplitude = bassBins.maxOrNull() ?: 0f
+    val colorBass = MaterialTheme.colorScheme.primary
+    val colorMid = MaterialTheme.colorScheme.secondary
+    val colorHigh = MaterialTheme.colorScheme.tertiary
+    
+    // Overall amplitude for pulsing the entire component
+    val maxAmplitude = visualizerData.maxOrNull() ?: 0f
     val animatedPulse by animateFloatAsState(
         targetValue = if (isPlaying) maxAmplitude else 0f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "pulse"
     )
 
-    Row(
+    // Jitter for micro-vibrations
+    val globalJitter by infiniteTransition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "globalJitter"
+    )
+
+    Canvas(
         modifier = modifier.graphicsLayer {
-            // Uniquement pulsation horizontale (gauche/droite)
+            // Pulse in BOTH directions for a modern "stressed" effect
             scaleX = 1f + (animatedPulse * 0.15f * volume)
-            scaleY = 1f 
-        },
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.CenterVertically
+            scaleY = 1f + (animatedPulse * 0.2f * volume) // Vertical pulse enabled
+        }
     ) {
+        val spacing = 2.dp.toPx()
+        val totalSpacing = spacing * (barCount - 1)
+        val barWidth = (size.width - totalSpacing) / barCount
+        
         repeat(barCount) { i ->
-            // Bowtie shape: Taller on sides, shorter in middle
+            // Normalized distance from center (0 at middle, 1 at edges)
             val distFromCenter = Math.abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
+            
+            // Butterfly shape logic: taller on ends
             val shapeFactor = 0.3f + (distFromCenter * 0.7f)
             
-            // Fixed height logic based on shape, only subtle vibration
-            val jitter by infiniteTransition.animateFloat(
-                initialValue = 0.95f,
-                targetValue = 1.05f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween((150..300).random(), easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "jitter_$i"
-            )
+            // Map data index symmetrically (Bass/Kick in the center, Highs at edges)
+            val dataIndex = (distFromCenter * (visualizerData.size - 1)).toInt()
+            val amplitude = visualizerData[dataIndex.coerceIn(0, visualizerData.size - 1)]
             
-            val baseHeight = 36.dp
+            // Color based on frequency type (like the circular one)
+            val barColor = when {
+                distFromCenter < 0.3f -> colorBass // Middle = Bass/Kick
+                distFromCenter < 0.7f -> colorMid  // Mid = Vocals/Clap
+                else -> colorHigh                 // Edges = Cymbals/Highs
+            }
+            
+            val baseHeight = size.height
             val finalHeight = if (isPlaying) {
-                baseHeight * shapeFactor * jitter * (0.8f + (maxAmplitude * 0.2f))
+                baseHeight * shapeFactor * globalJitter * (0.6f + (amplitude * 0.9f))
             } else {
                 baseHeight * shapeFactor * 0.5f
             }
 
-            val colorAlpha = if (isPlaying) (0.5f + (maxAmplitude * 0.5f)).coerceIn(0.2f, 1f) else 0.2f
+            val colorAlpha = if (isPlaying) (0.4f + (amplitude * 0.6f)).coerceIn(0.2f, 1f) else 0.2f
             
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(finalHeight)
-                    .background(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = colorAlpha),
-                        shape = CircleShape
-                    )
+            val left = i * (barWidth + spacing)
+            val top = (size.height - finalHeight) / 2
+            
+            drawRoundRect(
+                color = barColor.copy(alpha = colorAlpha),
+                topLeft = Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(barWidth, finalHeight),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2, barWidth / 2)
             )
         }
     }
@@ -1440,6 +1538,8 @@ fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray
 fun AdvancedBottomPlayer(
     item: MediaItem,
     isPlaying: Boolean,
+    currentPos: Long,
+    duration: Long,
     playbackSpeed: Float,
     volume: Float,
     visualizerData: FloatArray,
@@ -1456,26 +1556,111 @@ fun AdvancedBottomPlayer(
 ) {
     var showVolumeControl by remember { mutableStateOf(false) }
 
+    // RGB Animation for the background border
+    val infiniteTransition = rememberInfiniteTransition(label = "rgb_player")
+    val hue by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(10000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "hue"
+    )
+    val rgbColor = Color.hsv(hue, 0.7f, 0.9f)
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        tonalElevation = 8.dp
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .height(72.dp) // Smaller height
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
+            .clickable(onClick = onClick)
+            .border(1.dp, rgbColor, RoundedCornerShape(16.dp)), // RGB Border
+        color = Color.Transparent,
+        tonalElevation = 12.dp
     ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text(item.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column {
+            // Very thin top progress line (Spotify style)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(rgbColor.copy(alpha = 0.3f))
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Circular Artwork with Circular Progress
+                Box(contentAlignment = Alignment.Center) {
+                    val progress = if (duration > 0) currentPos.toFloat() / duration else 0f
+                    
+                    // Progress ring around the circle
+                    Canvas(modifier = Modifier.size(54.dp)) {
+                        drawArc(
+                            color = rgbColor.copy(alpha = 0.2f),
+                            startAngle = 0f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                        drawArc(
+                            color = rgbColor,
+                            startAngle = -90f,
+                            sweepAngle = 360f * progress,
+                            useCenter = false,
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                    }
+
+                    if (item.albumArtUri != null) {
+                        AsyncImage(
+                            model = item.albumArtUri,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = rgbColor)
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp)
+                ) {
                     Text(
-                        text = "${item.artist} • ${item.album}", 
-                        style = MaterialTheme.typography.bodySmall, 
-                        maxLines = 1, 
+                        text = item.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = item.artist,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
+                // Playback Mode Button
                 IconButton(onClick = onCycleMode) {
                     val icon = when {
                         shuffleMode -> Icons.Default.Shuffle
@@ -1483,119 +1668,35 @@ fun AdvancedBottomPlayer(
                         repeatMode == Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
                         else -> Icons.Default.Repeat
                     }
-                    val tint = if (!shuffleMode && repeatMode == Player.REPEAT_MODE_OFF) 
-                        MaterialTheme.colorScheme.onSurfaceVariant 
-                    else 
-                        MaterialTheme.colorScheme.primary
-
                     Icon(
                         imageVector = icon,
-                        contentDescription = "Playback Mode",
-                        tint = tint
+                        contentDescription = "Mode",
+                        modifier = Modifier.size(22.dp),
+                        tint = if (shuffleMode || repeatMode != Player.REPEAT_MODE_OFF) rgbColor else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
-                IconButton(onClick = { onSeek(-10000L) }) { Icon(Icons.Default.Replay10, contentDescription = "-10s") }
-                IconButton(onClick = onPrev) { Icon(Icons.Default.SkipPrevious, contentDescription = "Précédent") }
-                IconButton(onClick = { onTogglePlay() }) {
-                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause")
-                }
-                IconButton(onClick = { onNext() }) { Icon(Icons.Default.SkipNext, contentDescription = "Suivant") }
-                IconButton(onClick = { onSeek(10000L) }) { Icon(Icons.Default.Forward10, contentDescription = "+10s") }
-            }
-            
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
-                Box(contentAlignment = Alignment.BottomCenter) {
-                    IconButton(onClick = { showVolumeControl = !showVolumeControl }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.VolumeUp, 
-                            contentDescription = "Volume", 
-                            modifier = Modifier.size(24.dp),
-                            tint = if (showVolumeControl) MaterialTheme.colorScheme.primary else LocalContentColor.current
-                        )
-                    }
 
-                    if (showVolumeControl) {
-                        Popup(
-                            alignment = Alignment.TopCenter,
-                            offset = IntOffset(0, -40),
-                            onDismissRequest = { showVolumeControl = false }
-                        ) {
-                            Surface(
-                                modifier = Modifier
-                                    .height(200.dp)
-                                    .width(32.dp),
-                                shape = MaterialTheme.shapes.extraLarge,
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
-                                tonalElevation = 6.dp
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.padding(vertical = 12.dp)
-                                ) {
-                                    Text(
-                                        text = "${(volume * 100).toInt()}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxWidth()
-                                            .pointerInput(Unit) {
-                                                detectDragGestures { change, dragAmount ->
-                                                    change.consume()
-                                                    val height = size.height.toFloat()
-                                                    val newValue = (1f - (change.position.y / height)).coerceIn(0f, 1f)
-                                                    onVolumeChange(newValue)
-                                                }
-                                            },
-                                        contentAlignment = Alignment.BottomCenter
-                                    ) {
-                                        // Background track
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxHeight()
-                                                .width(4.dp)
-                                                .background(Color.Gray.copy(alpha = 0.1f), CircleShape)
-                                        )
-                                        // Active volume level
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxHeight(volume)
-                                                .width(4.dp)
-                                                .background(MaterialTheme.colorScheme.primary, CircleShape)
-                                        )
-                                        // Thumb indicator
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.BottomCenter)
-                                                .offset(y = (- (volume * 140)).dp)
-                                                .size(12.dp)
-                                                .background(MaterialTheme.colorScheme.primary, CircleShape)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // Simplified controls for mini-player
+                IconButton(onClick = onPrev) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", modifier = Modifier.size(28.dp))
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = onTogglePlay,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(rgbColor.copy(alpha = 0.1f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = "Play/Pause",
+                        tint = rgbColor,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
 
-                TextButton(onClick = { 
-                    val nextSpeed = when(playbackSpeed) {
-                        1.0f -> 1.5f
-                        1.5f -> 2.0f
-                        else -> 1.0f
-                    }
-                    onSpeedChange(nextSpeed)
-                }) {
-                    Text("${playbackSpeed}x", fontWeight = FontWeight.Bold)
+                IconButton(onClick = onNext) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(28.dp))
                 }
             }
         }
@@ -1686,4 +1787,21 @@ fun getLocalMedia(context: Context): List<MediaItem> {
     }
     
     return mediaItems
+}
+
+fun shuffleQueuePhysical(player: Player) {
+    if (player.mediaItemCount > 1) {
+        val list = mutableListOf<Media3Item>()
+        for (i in 0 until player.mediaItemCount) {
+            list.add(player.getMediaItemAt(i))
+        }
+        val currentIdx = player.currentMediaItemIndex
+        val currentItem = list.removeAt(currentIdx)
+        list.shuffle()
+        list.add(currentIdx, currentItem)
+        
+        // Use setMediaItems with resetPosition = false for seamless update
+        player.setMediaItems(list, false)
+        // No seekTo needed if item and index remain the same
+    }
 }
