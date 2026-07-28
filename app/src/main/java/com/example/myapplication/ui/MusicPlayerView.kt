@@ -303,7 +303,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
     var currentPos by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, items) { // Re-bind listener when items (sort order) changes
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingChanged: Boolean) {
                 isPlaying = isPlayingChanged
@@ -349,6 +349,21 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
             currentPos = player.currentPosition
             duration = player.duration.coerceAtLeast(0L)
             delay(1000)
+        }
+    }
+
+    // Sync currentIndex when the list (items) changes due to sorting or searching
+    LaunchedEffect(items) {
+        val currentUri = player.currentMediaItem?.localConfiguration?.uri
+        if (currentUri != null) {
+            val idx = items.indexOfFirst { it.uri == currentUri }
+            if (idx != -1) {
+                currentIndex = idx
+                // Update player queue to match new sort order without cutting sound
+                val media3Items = items.map { createMedia3Item(it) }
+                player.setMediaItems(media3Items, false) // preserve position
+                player.seekTo(idx, player.currentPosition)
+            }
         }
     }
 
@@ -620,6 +635,16 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                     
                     if (nextShuffle && !shuffleMode) {
                         shuffleQueuePhysical(player)
+                    } else if (!nextShuffle && shuffleMode) {
+                        // Restore library order when switching back from Shuffle to Normal
+                        val media3Items = items.map { createMedia3Item(it) }
+                        val currentUri = player.currentMediaItem?.localConfiguration?.uri
+                        val currentIdx = if (currentUri != null) items.indexOfFirst { it.uri == currentUri } else -1
+                        
+                        if (currentIdx != -1) {
+                            player.setMediaItems(media3Items, false)
+                            player.seekTo(currentIdx, player.currentPosition)
+                        }
                     }
 
                     player.shuffleModeEnabled = nextShuffle
@@ -646,6 +671,39 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
             shuffleMode = shuffleMode,
             repeatMode = repeatMode,
             currentLanguage = currentLanguage,
+            onCycleMode = {
+                val (nextShuffle, nextRepeat, msg) = when {
+                    !shuffleMode && repeatMode == Player.REPEAT_MODE_OFF -> {
+                        Triple(true, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Aléatoire" else "Shuffle Mode")
+                    }
+                    shuffleMode -> {
+                        Triple(false, Player.REPEAT_MODE_ALL, if (currentLanguage == "FR") "Tout répéter" else "Loop All")
+                    }
+                    repeatMode == Player.REPEAT_MODE_ALL -> {
+                        Triple(false, Player.REPEAT_MODE_ONE, if (currentLanguage == "FR") "Répéter un titre" else "Repeat One")
+                    }
+                    else -> {
+                        Triple(false, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Normal" else "Normal Mode")
+                    }
+                }
+                
+                if (nextShuffle && !shuffleMode) {
+                    shuffleQueuePhysical(player)
+                } else if (!nextShuffle && shuffleMode) {
+                    val media3Items = items.map { createMedia3Item(it) }
+                    val currentUri = player.currentMediaItem?.localConfiguration?.uri
+                    val currentIdx = if (currentUri != null) items.indexOfFirst { it.uri == currentUri } else -1
+                    if (currentIdx != -1) {
+                        player.setMediaItems(media3Items, false)
+                        player.seekTo(currentIdx, player.currentPosition)
+                    }
+                }
+
+                player.shuffleModeEnabled = nextShuffle
+                player.repeatMode = nextRepeat
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            },
+            items = items, // Added items
             onDismiss = { showNowPlaying = false }
         )
     }
@@ -777,6 +835,8 @@ fun NowPlayingDialog(
     shuffleMode: Boolean,
     repeatMode: Int,
     currentLanguage: String,
+    onCycleMode: () -> Unit,
+    items: List<MediaItem>, // Added items
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -831,7 +891,7 @@ fun NowPlayingDialog(
 
                 if (showQueue) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    QueueView(player, currentLanguage)
+                    QueueView(player, currentLanguage, items) // Passed items
                 } else {
                     Spacer(modifier = Modifier.height(48.dp))
 
@@ -994,30 +1054,7 @@ fun NowPlayingDialog(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = {
-                            val (nextShuffle, nextRepeat, msg) = when {
-                                !shuffleMode && repeatMode == Player.REPEAT_MODE_OFF -> {
-                                    Triple(true, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Aléatoire" else "Shuffle Mode")
-                                }
-                                shuffleMode -> {
-                                    Triple(false, Player.REPEAT_MODE_ALL, if (currentLanguage == "FR") "Tout répéter" else "Loop All")
-                                }
-                                repeatMode == Player.REPEAT_MODE_ALL -> {
-                                    Triple(false, Player.REPEAT_MODE_ONE, if (currentLanguage == "FR") "Répéter un titre" else "Repeat One")
-                                }
-                                else -> {
-                                    Triple(false, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Normal" else "Normal Mode")
-                                }
-                            }
-                            
-                            if (nextShuffle && !shuffleMode) {
-                                shuffleQueuePhysical(player)
-                            }
-
-                            player.shuffleModeEnabled = nextShuffle
-                            player.repeatMode = nextRepeat
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                        }) {
+                        IconButton(onClick = onCycleMode) {
                             val icon = when {
                                 shuffleMode -> Icons.Default.Shuffle
                                 repeatMode == Player.REPEAT_MODE_ALL -> Icons.Default.Repeat
@@ -1252,7 +1289,7 @@ class QueueTouchCallback(private val adapter: QueueAdapter) : ItemTouchHelper.Si
             recyclerView, viewSize, viewSizeOutOfBounds, totalSize, msSinceStartScroll
         )
         // Multiplier la vitesse par 4 pour une réactivité extrême sur les longues listes
-        val multiplier = if (msSinceStartScroll > 2000) 6 else 3 // Accélération progressive
+        val multiplier = if (msSinceStartScroll > 2000) 10 else 4 // Accélération progressive ultra-rapide
         return standardSpeed * multiplier
     }
     
@@ -1282,7 +1319,7 @@ class QueueTouchCallback(private val adapter: QueueAdapter) : ItemTouchHelper.Si
     }
 }
 @Composable
-fun QueueView(player: Player, currentLanguage: String) {
+fun QueueView(player: Player, currentLanguage: String, libraryItems: List<MediaItem>) {
     val context = LocalContext.current
     val queueItems = remember { mutableStateListOf<Media3Item>() }
     
@@ -1357,6 +1394,15 @@ fun QueueView(player: Player, currentLanguage: String) {
                 
                 if (nextShuffle && !shuffleMode) {
                     shuffleQueuePhysical(player)
+                } else if (!nextShuffle && shuffleMode) {
+                    // Restore library order
+                    val media3Items = libraryItems.map { createMedia3Item(it) }
+                    val currentUri = player.currentMediaItem?.localConfiguration?.uri
+                    val currentIdx = if (currentUri != null) libraryItems.indexOfFirst { it.uri == currentUri } else -1
+                    if (currentIdx != -1) {
+                        player.setMediaItems(media3Items, false)
+                        player.seekTo(currentIdx, player.currentPosition)
+                    }
                 }
 
                 player.shuffleModeEnabled = nextShuffle
@@ -1484,9 +1530,9 @@ fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray
 
     Canvas(
         modifier = modifier.graphicsLayer {
-            // Pulse in BOTH directions for a modern "stressed" effect
+            // Pulse ONLY horizontally as requested
             scaleX = 1f + (animatedPulse * 0.15f * volume)
-            scaleY = 1f + (animatedPulse * 0.2f * volume) // Vertical pulse enabled
+            scaleY = 1f // NO vertical pulse of the container
         }
     ) {
         val spacing = 2.dp.toPx()
@@ -1494,34 +1540,33 @@ fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray
         val barWidth = (size.width - totalSpacing) / barCount
         
         repeat(barCount) { i ->
-            // Normalized distance from center (0 at middle, 1 at edges)
-            val distFromCenter = Math.abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
-            
-            // Butterfly shape logic: taller on ends
-            val shapeFactor = 0.3f + (distFromCenter * 0.7f)
+            // Flat initial shape as requested (no more bowtie)
             
             // Map data index symmetrically (Bass/Kick in the center, Highs at edges)
+            val distFromCenter = Math.abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
             val dataIndex = (distFromCenter * (visualizerData.size - 1)).toInt()
             val amplitude = visualizerData[dataIndex.coerceIn(0, visualizerData.size - 1)]
             
-            // Color based on frequency type (like the circular one)
+            // Color based on frequency type
             val barColor = when {
                 distFromCenter < 0.3f -> colorBass // Middle = Bass/Kick
                 distFromCenter < 0.7f -> colorMid  // Mid = Vocals/Clap
                 else -> colorHigh                 // Edges = Cymbals/Highs
             }
             
-            val baseHeight = size.height
+            val baseHeight = 2.dp.toPx() // Very small initial "dots" height
             val finalHeight = if (isPlaying) {
-                baseHeight * shapeFactor * globalJitter * (0.6f + (amplitude * 0.9f))
+                // Grow UPWARDS: taller when amplitude is high
+                (baseHeight + (size.height - baseHeight) * globalJitter * amplitude * 1.5f).coerceAtMost(size.height)
             } else {
-                baseHeight * shapeFactor * 0.5f
+                baseHeight
             }
 
             val colorAlpha = if (isPlaying) (0.4f + (amplitude * 0.6f)).coerceIn(0.2f, 1f) else 0.2f
             
             val left = i * (barWidth + spacing)
-            val top = (size.height - finalHeight) / 2
+            // Align to bottom to grow UPWARDS
+            val top = size.height - finalHeight
             
             drawRoundRect(
                 color = barColor.copy(alpha = colorAlpha),
