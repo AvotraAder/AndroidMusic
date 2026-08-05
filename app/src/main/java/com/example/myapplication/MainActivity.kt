@@ -70,6 +70,7 @@ class MainActivity : ComponentActivity() {
                         when (currentScreen) {
                             Screen.DASHBOARD -> {
                                 currentUser?.let { user ->
+                                    var currentHistoryId by remember { mutableStateOf<Long?>(null) }
                                     DashboardScreen(
                                         user = user,
                                         isDarkMode = isDarkMode,
@@ -102,17 +103,27 @@ class MainActivity : ComponentActivity() {
                                             }
                                         },
                                         userDao = userDao,
-                                        onMediaPlayed = { media ->
+                                        onMediaStart = { media ->
                                             scope.launch(Dispatchers.IO) {
-                                                userDao.insertHistory(
+                                                val id = userDao.insertHistory(
                                                     PlaybackHistory(
                                                         username = user.username,
                                                         mediaTitle = media.title,
                                                         artist = media.artist,
                                                         album = media.album,
-                                                        durationMs = 30000 
+                                                        durationMs = 0
                                                     )
                                                 )
+                                                withContext(Dispatchers.Main) {
+                                                    currentHistoryId = id
+                                                }
+                                            }
+                                        },
+                                        onMediaProgress = { _, delta ->
+                                            currentHistoryId?.let { id ->
+                                                scope.launch(Dispatchers.IO) {
+                                                    userDao.incrementDuration(id, delta)
+                                                }
                                             }
                                         }
                                     )

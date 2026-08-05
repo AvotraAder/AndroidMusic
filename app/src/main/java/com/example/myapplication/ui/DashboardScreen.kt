@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myapplication.data.PlaybackHistory
 import com.example.myapplication.data.TopMedia
 import com.example.myapplication.data.TopArtist
@@ -42,7 +43,8 @@ fun DashboardScreen(
     onLogout: () -> Unit,
     onUpdateProfile: (String, String) -> Unit,
     userDao: UserDao,
-    onMediaPlayed: (MediaItem) -> Unit
+    onMediaStart: (MediaItem) -> Unit,
+    onMediaProgress: (Long, Long) -> Unit
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -184,7 +186,7 @@ fun DashboardScreen(
                     "profile" -> ProfileEditView(user.username, t, onUpdate = { newName, newPwd -> 
                         onUpdateProfile(newName, newPwd)
                     })
-                    "music" -> MusicPlayerView(currentLanguage, user.username, onMediaPlayed)
+                    "music" -> MusicPlayerView(currentLanguage, onMediaStart, onMediaProgress)
                     "help" -> InfoView(t["help"]!!, t["help_content"]!!)
                     "contact" -> InfoView(t["contact"]!!, t["contact_content"]!!)
                 }
@@ -195,26 +197,27 @@ fun DashboardScreen(
 
 @Composable
 fun HomeView(username: String, t: Map<String, String>, userDao: UserDao) {
-    var topMedias by remember { mutableStateOf<List<TopMedia>>(emptyList()) }
-    var topArtists by remember { mutableStateOf<List<TopArtist>>(emptyList()) }
-    var recentHistory by remember { mutableStateOf<List<PlaybackHistory>>(emptyList()) }
-    var totalTime by remember { mutableLongStateOf(0L) }
-    var playsToday by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(username) {
-        topMedias = userDao.getTopMedias(username)
-        topArtists = userDao.getTopArtists(username)
-        recentHistory = userDao.getRecentHistory(username)
-        totalTime = userDao.getTotalListenTime(username) ?: 0L
-        
-        val cal = Calendar.getInstance().apply {
+    // Mémoriser les flows pour éviter de les recréer à chaque seconde
+    val topMediasFlow = remember(username) { userDao.getTopMedias(username) }
+    val topArtistsFlow = remember(username) { userDao.getTopArtists(username) }
+    val recentHistoryFlow = remember(username) { userDao.getRecentHistory(username) }
+    val totalTimeFlow = remember(username) { userDao.getTotalListenTime(username) }
+    
+    val todayStart = remember {
+        Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-        }
-        playsToday = userDao.getPlaysToday(username, cal.timeInMillis)
+        }.timeInMillis
     }
+    val playsTodayFlow = remember(username, todayStart) { userDao.getPlaysToday(username, todayStart) }
+
+    val topMedias by topMediasFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val topArtists by topArtistsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val recentHistory by recentHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val totalTime by totalTimeFlow.collectAsStateWithLifecycle(initialValue = 0L)
+    val playsToday by playsTodayFlow.collectAsStateWithLifecycle(initialValue = 0)
 
     Column(
         modifier = Modifier
@@ -241,7 +244,7 @@ fun HomeView(username: String, t: Map<String, String>, userDao: UserDao) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             MetricCard(
                 title = t["total_time"]!!,
-                value = formatDurationShort(totalTime),
+                value = formatDurationShort(totalTime ?: 0L),
                 icon = Icons.Default.Timer,
                 modifier = Modifier.weight(1f)
             )
@@ -393,9 +396,15 @@ fun StatBar(label: String, value: String, progress: Float, color: Color = Materi
 
 fun formatDurationShort(ms: Long): String {
     val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val hours = minutes / 60
-    return if (hours > 0) "${hours}h ${minutes % 60}m" else "${minutes}m"
+    val seconds = totalSeconds % 60
+    val minutes = (totalSeconds / 60) % 60
+    val hours = totalSeconds / 3600
+    
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
 }
 
 @Composable

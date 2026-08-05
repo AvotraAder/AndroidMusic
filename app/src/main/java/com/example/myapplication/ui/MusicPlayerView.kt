@@ -17,7 +17,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -26,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,13 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +73,10 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.math.*
+import androidx.core.net.toUri
+import androidx.core.graphics.toColorInt
 import android.media.audiofx.Visualizer
 import androidx.media3.session.MediaController as Media3Controller
 import coil.compose.AsyncImage
@@ -97,12 +99,13 @@ data class MediaItem(
     val type: MediaType,
     val dateAdded: Long,
     val size: Long,
+    val duration: Long, // Added duration
     val albumArtUri: Uri? = null
 )
 
 @kotlin.OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun MusicPlayerView(currentLanguage: String, username: String, onMediaPlayed: (MediaItem) -> Unit) {
+fun MusicPlayerView(currentLanguage: String, onMediaStart: (MediaItem) -> Unit, onMediaProgress: (Long, Long) -> Unit) {
     val context = LocalContext.current
     val permissions = mutableListOf<String>()
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -120,7 +123,7 @@ fun MusicPlayerView(currentLanguage: String, username: String, onMediaPlayed: (M
     val buttonText = if (currentLanguage == "FR") "Autoriser l'accès" else "Allow access"
 
     if (permissionState.allPermissionsGranted) {
-        MediaControllerWrapper(context, currentLanguage, username, onMediaPlayed)
+        MediaControllerWrapper(context, currentLanguage, onMediaStart, onMediaProgress)
     } else {
         Column(
             modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -138,7 +141,7 @@ fun MusicPlayerView(currentLanguage: String, username: String, onMediaPlayed: (M
 
 @OptIn(UnstableApi::class)
 @Composable
-fun MediaControllerWrapper(context: Context, currentLanguage: String, username: String, onMediaPlayed: (MediaItem) -> Unit) {
+fun MediaControllerWrapper(context: Context, currentLanguage: String, onMediaStart: (MediaItem) -> Unit, onMediaProgress: (Long, Long) -> Unit) {
     var controller by remember { mutableStateOf<MediaController?>(null) }
     
     DisposableEffect(context) {
@@ -157,14 +160,14 @@ fun MediaControllerWrapper(context: Context, currentLanguage: String, username: 
 
     controller?.let {
         val audioSessionId = it.sessionExtras.getInt("AUDIO_SESSION_ID", 0)
-        MediaTabs(context, currentLanguage, it, audioSessionId, onMediaPlayed)
+        MediaTabs(context, currentLanguage, it, audioSessionId, onMediaStart, onMediaProgress)
     } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         CircularProgressIndicator()
     }
 }
 
 @Composable
-fun MediaTabs(context: Context, currentLanguage: String, player: Player, audioSessionId: Int, onMediaPlayed: (MediaItem) -> Unit) {
+fun MediaTabs(context: Context, currentLanguage: String, player: Player, audioSessionId: Int, onMediaStart: (MediaItem) -> Unit, onMediaProgress: (Long, Long) -> Unit) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var sortOrder by remember { mutableStateOf(SortOrder.NAME) }
     var isAscending by remember { mutableStateOf(true) }
@@ -282,14 +285,14 @@ fun MediaTabs(context: Context, currentLanguage: String, player: Player, audioSe
         }
         
         key(selectedTab) {
-            MediaList(filteredItems, if (selectedTab == 0) MediaType.AUDIO else MediaType.VIDEO, emptyText, player, audioSessionId, currentLanguage, sortOrder, onMediaPlayed)
+            MediaList(filteredItems, if (selectedTab == 0) MediaType.AUDIO else MediaType.VIDEO, emptyText, player, audioSessionId, currentLanguage, sortOrder, onMediaStart, onMediaProgress)
         }
     }
 }
 
 @OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player: Player, audioSessionId: Int, currentLanguage: String, sortOrder: SortOrder, onMediaPlayed: (MediaItem) -> Unit) {
+fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player: Player, audioSessionId: Int, currentLanguage: String, sortOrder: SortOrder, onMediaStart: (MediaItem) -> Unit, onMediaProgress: (Long, Long) -> Unit) {
     val context = LocalContext.current
     var currentIndex by remember { mutableIntStateOf(-1) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -320,7 +323,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                         if (idx != -1) {
                             currentIndex = idx
                             lastLoggedUri = currentUri
-                            onMediaPlayed(items[idx])
+                            onMediaStart(items[idx])
                         }
                     }
                 }
@@ -357,10 +360,18 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
     }
 
     LaunchedEffect(isPlaying, currentIndex) {
+        var lastTime = System.currentTimeMillis()
         while (isPlaying) {
+            val now = System.currentTimeMillis()
+            val delta = now - lastTime
+            if (delta >= 1000 && currentIndex != -1 && currentIndex < items.size) {
+                onMediaProgress(0L, delta)
+                lastTime = now
+            }
+
             currentPos = player.currentPosition
             duration = player.duration.coerceAtLeast(0L)
-            delay(1000)
+            delay(1000.milliseconds)
         }
     }
 
@@ -379,39 +390,39 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
         }
     }
 
-    val visualizerData = remember { mutableStateOf(FloatArray(40) { 0f }) }
+    val visualizerData = remember { mutableStateOf(FloatArray(40)) }
 
     DisposableEffect(audioSessionId, isPlaying) {
         if (audioSessionId <= 0 || !isPlaying) {
-            visualizerData.value = FloatArray(40) { 0f }
+            visualizerData.value = FloatArray(40)
             return@DisposableEffect onDispose {}
         }
         
         val visualizer = try {
-            android.media.audiofx.Visualizer(audioSessionId).apply {
-                captureSize = android.media.audiofx.Visualizer.getCaptureSizeRange()[1]
-                setDataCaptureListener(object : android.media.audiofx.Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(v: android.media.audiofx.Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
-                    override fun onFftDataCapture(v: android.media.audiofx.Visualizer?, fft: ByteArray?, samplingRate: Int) {
+            Visualizer(audioSessionId).apply {
+                captureSize = Visualizer.getCaptureSizeRange()[1]
+                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
+                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         if (fft != null) {
                             val newData = FloatArray(40)
                             for (i in 0 until 40) {
                                 val rf = fft[i * 2].toInt()
                                 val ifrag = fft[i * 2 + 1].toInt()
-                                val mag = Math.sqrt((rf * rf + ifrag * ifrag).toDouble()).toFloat()
+                                val mag = sqrt((rf * rf + ifrag * ifrag).toDouble()).toFloat()
                                 newData[i] = mag / 30f // Scaling for UI
                             }
                             visualizerData.value = newData
                         }
                     }
-                }, android.media.audiofx.Visualizer.getMaxCaptureRate(), false, true) // MAX frequency for zero lag
+                }, Visualizer.getMaxCaptureRate(), false, true) // MAX frequency for zero lag
                 enabled = true
             }
-        } catch (e: Exception) { null }
+        } catch (_: Exception) { null }
 
         onDispose {
             visualizer?.enabled = false
-            try { visualizer?.release() } catch (e: Exception) {}
+            try { visualizer?.release() } catch (_: Exception) {}
         }
     }
 
@@ -497,7 +508,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                                                     player.addMediaItem(nextIndex, createMedia3Item(item))
                                                     showItemMenu = false
                                                 },
-                                                leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) }
+                                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) }
                                             )
                                         }
                                     }
@@ -518,13 +529,10 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                             .width(48.dp) // Wider area for easier touch
                     ) {
                         val containerHeight = maxHeight
-                        val firstVisible = listState.firstVisibleItemIndex
-                        val visibleItemsCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                        val firstVisible by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+                        val visibleItemsCount by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1) } }
                         
                         if (visibleItemsCount < totalItems) {
-                            val scrollbarHeightFraction = (visibleItemsCount.toFloat() / totalItems).coerceIn(0.1f, 1f)
-                            val scrollbarOffsetFraction = (firstVisible.toFloat() / totalItems)
-                            
                             val thumbHeight = containerHeight * (visibleItemsCount.toFloat() / totalItems).coerceIn(0.1f, 1f)
                             val thumbOffset = containerHeight * (firstVisible.toFloat() / totalItems)
 
@@ -611,23 +619,11 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                 isPlaying = isPlaying,
                 currentPos = currentPos,
                 duration = duration,
-                playbackSpeed = playbackSpeed,
-                volume = volume,
-                visualizerData = visualizerData.value,
                 shuffleMode = shuffleMode,
                 repeatMode = repeatMode,
                 onTogglePlay = { if (player.isPlaying) player.pause() else player.play() },
                 onNext = { player.seekToNext() },
                 onPrev = { player.seekToPrevious() },
-                onSpeedChange = { 
-                    playbackSpeed = it
-                    player.setPlaybackSpeed(it)
-                },
-                onVolumeChange = {
-                    volume = it
-                    player.volume = it
-                },
-                onSeek = { player.seekTo(player.currentPosition + it) },
                 onCycleMode = {
                     val (nextShuffle, nextRepeat, msg) = when {
                         !shuffleMode && repeatMode == Player.REPEAT_MODE_OFF -> {
@@ -672,7 +668,6 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
             item = items[currentIndex],
             player = player,
             isPlaying = isPlaying,
-            playbackSpeed = playbackSpeed,
             volume = volume,
             visualizerData = visualizerData.value,
             onVolumeChange = {
@@ -839,7 +834,6 @@ fun NowPlayingDialog(
     item: MediaItem,
     player: Player,
     isPlaying: Boolean,
-    playbackSpeed: Float,
     volume: Float,
     visualizerData: FloatArray,
     onVolumeChange: (Float) -> Unit,
@@ -850,7 +844,6 @@ fun NowPlayingDialog(
     items: List<MediaItem>, // Added items
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
     var currentPos by remember { mutableLongStateOf(player.currentPosition) }
     var duration by remember { mutableLongStateOf(player.duration.coerceAtLeast(0L)) }
     var showQueue by remember { mutableStateOf(false) }
@@ -860,7 +853,7 @@ fun NowPlayingDialog(
         while (isPlaying) {
             currentPos = player.currentPosition
             duration = player.duration.coerceAtLeast(0L)
-            delay(1000)
+            delay(1000.milliseconds)
         }
     }
 
@@ -893,7 +886,7 @@ fun NowPlayingDialog(
                     )
                     IconButton(onClick = { showQueue = !showQueue }) {
                         Icon(
-                            imageVector = Icons.Default.QueueMusic, 
+                            imageVector = Icons.AutoMirrored.Filled.QueueMusic, 
                             contentDescription = "Queue",
                             tint = if (showQueue) MaterialTheme.colorScheme.primary else LocalContentColor.current
                         )
@@ -1103,7 +1096,7 @@ fun NowPlayingDialog(
                         Box(contentAlignment = Alignment.BottomCenter) {
                             IconButton(onClick = { showVolumeControl = !showVolumeControl }) {
                                 Icon(
-                                    Icons.Default.VolumeUp,
+                                    Icons.AutoMirrored.Filled.VolumeUp,
                                     contentDescription = "Volume",
                                     tint = if (showVolumeControl) MaterialTheme.colorScheme.primary else LocalContentColor.current
                                 )
@@ -1141,7 +1134,7 @@ fun NowPlayingDialog(
                                                     .weight(1f)
                                                     .fillMaxWidth()
                                                     .pointerInput(Unit) {
-                                                        detectDragGestures { change, dragAmount ->
+                                                        detectDragGestures { change, _ ->
                                                             change.consume()
                                                             val height = size.height.toFloat()
                                                             val newValue = (1f - (change.position.y / height)).coerceIn(0f, 1f)
@@ -1195,7 +1188,7 @@ class QueueAdapter(
 
     var isDragging: Boolean = false
 
-    inner class QueueViewHolder(val binding: ItemQueueBinding) : RecyclerView.ViewHolder(binding.root)
+    class QueueViewHolder(val binding: ItemQueueBinding) : RecyclerView.ViewHolder(binding.root)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): QueueViewHolder {
         val binding = ItemQueueBinding.inflate(LayoutInflater.from(parent.context), parent, false)
@@ -1241,10 +1234,10 @@ class QueueAdapter(
 
             // Design Amélioré
             if (isCurrent) {
-                textTitle.setTextColor(android.graphics.Color.parseColor("#64B5F6")) // Dark Blue Accent
+                textTitle.setTextColor("#64B5F6".toColorInt()) // Dark Blue Accent
                 textTitle.setTypeface(null, android.graphics.Typeface.BOLD)
-                textNumber.setTextColor(android.graphics.Color.parseColor("#64B5F6"))
-                cardRoot.setCardBackgroundColor(android.graphics.Color.parseColor("#1A64B5F6")) // Blue highlight
+                textNumber.setTextColor("#64B5F6".toColorInt())
+                cardRoot.setCardBackgroundColor("#1A64B5F6".toColorInt()) // Blue highlight
             } else {
                 textTitle.setTextColor(android.graphics.Color.WHITE)
                 textTitle.setTypeface(null, android.graphics.Typeface.NORMAL)
@@ -1341,7 +1334,6 @@ class QueueTouchCallback(private val adapter: QueueAdapter) : ItemTouchHelper.Si
 @Composable
 fun QueueView(player: Player, currentLanguage: String, libraryItems: List<MediaItem>) {
     val context = LocalContext.current
-    val queueItems = remember { mutableStateListOf<Media3Item>() }
     
     fun getQueueList(): List<Media3Item> {
         val list = mutableListOf<Media3Item>()
@@ -1455,7 +1447,7 @@ fun QueueView(player: Player, currentLanguage: String, libraryItems: List<MediaI
                     touchHelper.attachToRecyclerView(this)
                 }
             },
-            update = { rv ->
+            update = { _ ->
                 // Basic updates if needed
             }
         )
@@ -1470,10 +1462,9 @@ fun formatTime(ms: Long): String {
 }
 
 @Composable
-fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation: Float = 0f, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
+fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, modifier: Modifier = Modifier, rotation: Float = 0f) {
     // Smooth the visualizer data to make it more fluid
-    val smoothedData = remember { FloatArray(80) { 0f } }
+    val smoothedData = remember { FloatArray(80) }
     
     Canvas(modifier = modifier) {
         val center = Offset(size.width / 2, size.height / 2)
@@ -1494,13 +1485,13 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
             
             val barHeight = (amplitude * 90f).coerceIn(2f, 100f)
             val angle = i * angleStep - 100f + rotation
-            val angleRad = Math.toRadians(angle.toDouble()).toFloat()
+            val angleRad = angle * (PI / 180f).toFloat()
             
-            val startX = center.x + Math.cos(angleRad.toDouble()).toFloat() * radius
-            val startY = center.y + Math.sin(angleRad.toDouble()).toFloat() * radius
+            val startX = center.x + cos(angleRad) * radius
+            val startY = center.y + sin(angleRad) * radius
             
-            val endX = center.x + Math.cos(angleRad.toDouble()).toFloat() * (radius + barHeight)
-            val endY = center.y + Math.sin(angleRad.toDouble()).toFloat() * (radius + barHeight)
+            val endX = center.x + cos(angleRad) * (radius + barHeight)
+            val endY = center.y + sin(angleRad) * (radius + barHeight)
             
             // Draw main bar
             drawLine(
@@ -1576,7 +1567,7 @@ fun BassVisualizer(isPlaying: Boolean, volume: Float, visualizerData: FloatArray
             // Flat initial shape as requested (no more bowtie)
             
             // Map data index symmetrically (Bass/Kick in the center, Highs at edges)
-            val distFromCenter = Math.abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
+            val distFromCenter = abs(i - (barCount - 1) / 2f) / ((barCount - 1) / 2f)
             val dataIndex = (distFromCenter * (visualizerData.size - 1)).toInt()
             val amplitude = visualizerData[dataIndex.coerceIn(0, visualizerData.size - 1)]
             
@@ -1618,22 +1609,14 @@ fun AdvancedBottomPlayer(
     isPlaying: Boolean,
     currentPos: Long,
     duration: Long,
-    playbackSpeed: Float,
-    volume: Float,
-    visualizerData: FloatArray,
     shuffleMode: Boolean,
     repeatMode: Int,
     onTogglePlay: () -> Unit,
     onNext: () -> Unit,
     onPrev: () -> Unit,
-    onSpeedChange: (Float) -> Unit,
-    onVolumeChange: (Float) -> Unit,
-    onSeek: (Long) -> Unit,
     onCycleMode: () -> Unit,
     onClick: () -> Unit
 ) {
-    var showVolumeControl by remember { mutableStateOf(false) }
-
     // RGB Animation for the background border
     val infiniteTransition = rememberInfiniteTransition(label = "rgb_player")
     val hue by infiniteTransition.animateFloat(
@@ -1800,7 +1783,8 @@ fun getLocalMedia(context: Context): List<MediaItem> {
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DATE_ADDED,
             MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.ALBUM_ID
+            MediaStore.Audio.Media.ALBUM_ID,
+            MediaStore.Audio.Media.DURATION
         ),
         null, null, null
     )?.use { cursor ->
@@ -1811,11 +1795,12 @@ fun getLocalMedia(context: Context): List<MediaItem> {
         val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
         val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
         val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+        val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
         
         while (cursor.moveToNext()) {
             val id = cursor.getLong(idCol)
             val albumId = cursor.getLong(albumIdCol)
-            val albumArtUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+            val albumArtUri = ContentUris.withAppendedId("content://media/external/audio/albumart".toUri(), albumId)
             
             mediaItems.add(MediaItem(
                 id, cursor.getString(titleCol), cursor.getString(artistCol), cursor.getString(albumCol),
@@ -1823,6 +1808,7 @@ fun getLocalMedia(context: Context): List<MediaItem> {
                 MediaType.AUDIO,
                 cursor.getLong(dateCol),
                 cursor.getLong(sizeCol),
+                cursor.getLong(durationCol),
                 albumArtUri
             ))
         }
@@ -1842,7 +1828,8 @@ fun getLocalMedia(context: Context): List<MediaItem> {
             MediaStore.Video.Media.TITLE,
             MediaStore.Video.Media.ALBUM,
             MediaStore.Video.Media.DATE_ADDED,
-            MediaStore.Video.Media.SIZE
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DURATION
         ),
         null, null, null
     )?.use { cursor ->
@@ -1851,6 +1838,7 @@ fun getLocalMedia(context: Context): List<MediaItem> {
         val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.ALBUM)
         val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
         val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+        val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
         
         while (cursor.moveToNext()) {
             val id = cursor.getLong(idCol)
@@ -1859,7 +1847,8 @@ fun getLocalMedia(context: Context): List<MediaItem> {
                 ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id),
                 MediaType.VIDEO,
                 cursor.getLong(dateCol),
-                cursor.getLong(sizeCol)
+                cursor.getLong(sizeCol),
+                cursor.getLong(durationCol)
             ))
         }
     }
