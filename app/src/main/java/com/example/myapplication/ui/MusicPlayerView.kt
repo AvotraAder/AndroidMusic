@@ -136,6 +136,7 @@ fun MusicPlayerView(currentLanguage: String, username: String, onMediaPlayed: (M
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 fun MediaControllerWrapper(context: Context, currentLanguage: String, username: String, onMediaPlayed: (MediaItem) -> Unit) {
     var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -303,6 +304,8 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
     var currentPos by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
 
+    var lastLoggedUri by remember { mutableStateOf<Uri?>(null) }
+
     DisposableEffect(player, items) { // Re-bind listener when items (sort order) changes
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingChanged: Boolean) {
@@ -311,10 +314,14 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
             override fun onMediaItemTransition(mediaItem: Media3Item?, reason: Int) {
                 val currentUri = player.currentMediaItem?.localConfiguration?.uri
                 if (currentUri != null) {
-                    val idx = items.indexOfFirst { it.uri == currentUri }
-                    if (idx != -1) {
-                        currentIndex = idx
-                        onMediaPlayed(items[idx])
+                    // Log if it's a new song OR a repeat of the same song
+                    if (currentUri != lastLoggedUri || reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+                        val idx = items.indexOfFirst { it.uri == currentUri }
+                        if (idx != -1) {
+                            currentIndex = idx
+                            lastLoggedUri = currentUri
+                            onMediaPlayed(items[idx])
+                        }
                     }
                 }
             }
@@ -331,7 +338,12 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
         val currentUri = player.currentMediaItem?.localConfiguration?.uri
         if (currentUri != null) {
             val idx = items.indexOfFirst { it.uri == currentUri }
-            if (idx != -1) currentIndex = idx
+            if (idx != -1) {
+                currentIndex = idx
+                // Don't log here, let the listener handle the FIRST transition if needed
+                // or initialize lastLoggedUri if already playing to avoid re-logging on tab switch
+                if (isPlaying) lastLoggedUri = currentUri
+            }
         }
         playbackSpeed = player.playbackParameters.speed
         volume = player.volume
@@ -392,7 +404,7 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                             visualizerData.value = newData
                         }
                     }
-                }, android.media.audiofx.Visualizer.getMaxCaptureRate() / 10, false, true) // Reduced frequency
+                }, android.media.audiofx.Visualizer.getMaxCaptureRate(), false, true) // MAX frequency for zero lag
                 enabled = true
             }
         } catch (e: Exception) { null }
@@ -437,7 +449,6 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                                     player.prepare()
                                     player.play()
                                     currentIndex = index
-                                    onMediaPlayed(item)
                                 }
                             },
                             headlineContent = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -1202,21 +1213,30 @@ class QueueAdapter(
             
             // Load Artwork
             val artworkUri = mediaItem.mediaMetadata.artworkUri
-            if (artworkUri != null) {
-                imageArtwork.visibility = View.VISIBLE
-                // Use Coil to load image into XML ImageView
-                imageArtwork.context.imageLoader.enqueue(
-                    coil.request.ImageRequest.Builder(imageArtwork.context)
-                        .data(artworkUri)
-                        .target(imageArtwork)
-                        .crossfade(true)
-                        .transformations(RoundedCornersTransformation(16f)) // Match radius
-                        .error(android.R.drawable.ic_menu_report_image)
-                        .placeholder(android.R.drawable.ic_menu_report_image)
-                        .build()
+            val isVideo = mediaItem.mediaMetadata.artist?.toString() == "Vidéo"
+            
+            imageArtwork.visibility = View.VISIBLE
+            
+            val placeholderIcon = if (isVideo) android.R.drawable.ic_menu_slideshow else android.R.drawable.ic_lock_silent_mode_off
+            
+            // Use Coil to load image or the correct placeholder icon
+            imageArtwork.context.imageLoader.enqueue(
+                coil.request.ImageRequest.Builder(imageArtwork.context)
+                    .data(artworkUri ?: placeholderIcon)
+                    .target(imageArtwork)
+                    .crossfade(true)
+                    .transformations(RoundedCornersTransformation(16f))
+                    .build()
+            )
+            
+            // Apply RGB tint only if it's the placeholder (no artwork)
+            if (artworkUri == null) {
+                val currentHue = (System.currentTimeMillis() % 10000) / 10000f * 360f
+                imageArtwork.imageTintList = android.content.res.ColorStateList.valueOf(
+                    android.graphics.Color.HSVToColor(floatArrayOf(currentHue, 0.6f, 0.9f))
                 )
             } else {
-                imageArtwork.setImageResource(android.R.drawable.ic_menu_report_image)
+                imageArtwork.imageTintList = null
             }
 
             // Design Amélioré
@@ -1452,25 +1472,28 @@ fun formatTime(ms: Long): String {
 @Composable
 fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation: Float = 0f, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    // Smooth the visualizer data to make it more fluid
+    val smoothedData = remember { FloatArray(80) { 0f } }
     
     Canvas(modifier = modifier) {
         val center = Offset(size.width / 2, size.height / 2)
         val radius = size.minDimension / 2 * 0.70f
-        val barCount = 80 // Doubled number of bars for a denser look
+        val barCount = 80
         val angleStep = 360f / barCount
 
         for (i in 0 until barCount) {
-            // Interpolate data for more bars
             val dataIndex = (i * visualizerData.size / barCount)
-            val amplitude = if (isPlaying) visualizerData[dataIndex] else 0f
+            val rawAmplitude = if (isPlaying) visualizerData[dataIndex] else 0f
             
-            // RGB Hue based on position and rotation for a cycling effect
+            // Apply smoothing (lerp)
+            smoothedData[i] = smoothedData[i] + (rawAmplitude - smoothedData[i]) * 0.6f
+            val amplitude = smoothedData[i]
+            
             val hue = (i * angleStep + rotation) % 360f
             val barColor = Color.hsv(hue, 0.8f, 1f)
             
-            // INCREASED MAX HEIGHT
-            val barHeight = (amplitude * 120f).coerceIn(4f, 160f)
-            val angle = i * angleStep - 90f + rotation
+            val barHeight = (amplitude * 90f).coerceIn(2f, 100f)
+            val angle = i * angleStep - 100f + rotation
             val angleRad = Math.toRadians(angle.toDouble()).toFloat()
             
             val startX = center.x + Math.cos(angleRad.toDouble()).toFloat() * radius
@@ -1479,22 +1502,32 @@ fun CircularVisualizer(isPlaying: Boolean, visualizerData: FloatArray, rotation:
             val endX = center.x + Math.cos(angleRad.toDouble()).toFloat() * (radius + barHeight)
             val endY = center.y + Math.sin(angleRad.toDouble()).toFloat() * (radius + barHeight)
             
+            // Draw main bar
             drawLine(
                 color = barColor,
                 start = Offset(startX, startY),
                 end = Offset(endX, endY),
-                strokeWidth = 2.dp.toPx(),
+                strokeWidth = 2.5.dp.toPx(),
                 cap = StrokeCap.Round
             )
 
-            // INCREASED GLOW INTENSITY
-            if (amplitude > 1.0f) {
+            // Dynamic Bloom effect
+            if (amplitude > 0.5f) {
                 drawCircle(
-                    color = barColor.copy(alpha = 0.05f * amplitude),
-                    radius = radius + barHeight + 10f,
+                    color = barColor.copy(alpha = 0.08f * amplitude),
+                    radius = radius + barHeight + 15f,
                     center = center,
-                    style = Stroke(width = 3.dp.toPx())
+                    style = Stroke(width = 4.dp.toPx())
                 )
+                // Secondary outer ring for intensity
+                if (amplitude > 1.2f) {
+                    drawCircle(
+                        color = barColor.copy(alpha = 0.04f),
+                        radius = radius + barHeight + 30f,
+                        center = center,
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
             }
         }
     }
@@ -1740,7 +1773,7 @@ fun AdvancedBottomPlayer(
                     )
                 }
 
-                IconButton(onClick = onNext) {
+                IconButton(onClick = { onNext() }) {
                     Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(28.dp))
                 }
             }

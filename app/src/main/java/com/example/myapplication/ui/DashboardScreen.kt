@@ -26,8 +26,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapplication.data.PlaybackHistory
 import com.example.myapplication.data.TopMedia
+import com.example.myapplication.data.TopArtist
 import com.example.myapplication.data.UserDao
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -194,13 +196,24 @@ fun DashboardScreen(
 @Composable
 fun HomeView(username: String, t: Map<String, String>, userDao: UserDao) {
     var topMedias by remember { mutableStateOf<List<TopMedia>>(emptyList()) }
+    var topArtists by remember { mutableStateOf<List<TopArtist>>(emptyList()) }
     var recentHistory by remember { mutableStateOf<List<PlaybackHistory>>(emptyList()) }
     var totalTime by remember { mutableLongStateOf(0L) }
+    var playsToday by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(username) {
         topMedias = userDao.getTopMedias(username)
+        topArtists = userDao.getTopArtists(username)
         recentHistory = userDao.getRecentHistory(username)
         totalTime = userDao.getTotalListenTime(username) ?: 0L
+        
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        playsToday = userDao.getPlaysToday(username, cal.timeInMillis)
     }
 
     Column(
@@ -209,90 +222,149 @@ fun HomeView(username: String, t: Map<String, String>, userDao: UserDao) {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        // Welcome Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        ) {
-            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(56.dp))
-                Spacer(modifier = Modifier.width(16.dp))
-                Column {
-                    Text(text = t["welcome"]!!, style = MaterialTheme.typography.labelMedium)
-                    Text(text = username, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
+        // Hero Section: Personalized Greeting
+        Text(
+            text = "${t["welcome"]!!} $username",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = if (t["home"] == "Statistiques") "Voici votre résumé musical" else "Here's your musical summary",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         
         Spacer(modifier = Modifier.height(24.dp))
-        Text(text = t["stats_title"]!!, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        
-        Spacer(modifier = Modifier.height(16.dp))
 
-        // Total Time Chart (Circular)
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(120.dp), contentAlignment = Alignment.Center) {
-                val animatedProgress by animateFloatAsState(
-                    targetValue = (totalTime % 3600000 / 3600000f).coerceIn(0f, 1f),
-                    animationSpec = tween(durationMillis = 1000)
+        // Metrics Grid
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MetricCard(
+                title = t["total_time"]!!,
+                value = formatDurationShort(totalTime),
+                icon = Icons.Default.Timer,
+                modifier = Modifier.weight(1f)
+            )
+            MetricCard(
+                title = if (t["home"] == "Statistiques") "Écoutés aujourd'hui" else "Played Today",
+                value = playsToday.toString(),
+                icon = Icons.Default.Today,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Main Chart Section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = t["stats_title"]!!,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
                 )
-                val primaryColor = MaterialTheme.colorScheme.primary
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawArc(
-                        color = Color.LightGray.copy(alpha = 0.3f),
-                        startAngle = 0f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round) // Thinner background circle
-                    )
-                    drawArc(
-                        color = primaryColor,
-                        startAngle = -90f,
-                        sweepAngle = 360f * animatedProgress,
-                        useCenter = false,
-                        style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round) // Thinner circle
-                    )
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Top Music Bar Chart
+                Text(text = t["top_music_chart"]!!, style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(12.dp))
+                if (topMedias.isEmpty()) {
+                    Text("---", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    topMedias.forEach { media ->
+                        val max = topMedias.first().count.toFloat().coerceAtLeast(1f)
+                        StatBar(
+                            label = media.mediaTitle, 
+                            value = media.count.toString(), 
+                            progress = media.count / max, 
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = formatDurationShort(totalTime), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Top Artists
+                Text(
+                    text = if (t["home"] == "Statistiques") "Top 5 Artistes" else "Top 5 Artists", 
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (topArtists.isEmpty()) {
+                    Text("---", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    topArtists.forEach { artist ->
+                        val max = topArtists.first().count.toFloat().coerceAtLeast(1f)
+                        StatBar(
+                            label = artist.artist, 
+                            value = artist.count.toString(), 
+                            progress = artist.count / max, 
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                 }
-            }
-            Spacer(modifier = Modifier.width(24.dp))
-            Column {
-                Text(t["total_time"]!!, style = MaterialTheme.typography.titleMedium)
-                Text("Total d'écoute accumulé", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // Top Music Chart
-        Text(text = t["top_music_chart"]!!, style = MaterialTheme.typography.titleMedium)
+        // Recent Activity
+        Text(text = t["recent_music"]!!, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(12.dp))
-        if (topMedias.isEmpty()) Text("---") else {
-            topMedias.forEach { media ->
-                val max = topMedias.first().count.toFloat()
-                StatBar(label = media.mediaTitle, value = media.count.toString(), progress = media.count / max, color = MaterialTheme.colorScheme.secondary)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-        Text(text = t["recent_music"]!!, style = MaterialTheme.typography.titleSmall)
-        Spacer(modifier = Modifier.height(8.dp))
 
         if (recentHistory.isEmpty()) {
-            Text(text = "---")
+            Text(text = "---", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             recentHistory.forEach { history ->
-                ListItem(
-                    headlineContent = { Text(history.mediaTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = { Text(history.artist) },
-                    leadingContent = { Icon(Icons.Default.History, contentDescription = null) }
-                )
+                Card(
+                    modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    ListItem(
+                        headlineContent = { Text(history.mediaTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold) },
+                        supportingContent = { Text("${history.artist} • ${history.album}") },
+                        leadingContent = { 
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Icon(
+                                    Icons.Default.History, 
+                                    contentDescription = null, 
+                                    modifier = Modifier.padding(8.dp).size(20.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                ) 
+                            }
+                        },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                    )
+                }
             }
         }
         
-        Spacer(modifier = Modifier.height(80.dp)) // Padding for bottom player
+        Spacer(modifier = Modifier.height(100.dp)) // Padding for bottom player
+    }
+}
+
+@Composable
+fun MetricCard(title: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(text = title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

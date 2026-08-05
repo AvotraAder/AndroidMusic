@@ -28,6 +28,13 @@ interface UserDao {
 
     @Query("SELECT SUM(durationMs) FROM playback_history WHERE username = :username")
     suspend fun getTotalListenTime(username: String): Long?
+
+    @Query("SELECT artist, COUNT(*) as count FROM playback_history WHERE username = :username GROUP BY artist ORDER BY count DESC LIMIT 5")
+    suspend fun getTopArtists(username: String): List<TopArtist>
+
+    @Query("SELECT COUNT(*) FROM playback_history WHERE username = :username AND timestamp >= :todayStart")
+    suspend fun getPlaysToday(username: String, todayStart: Long): Int
 }
 
 data class TopMedia(val mediaTitle: String, val count: Int)
+data class TopArtist(val artist: String, val count: Int)
