@@ -1,7 +1,7 @@
 # 🎵 AderSic - AndroidMusic
 
 A modern, high-performance, and responsive local music and video player for Android. Built with 100% Kotlin and the latest Jetpack libraries, featuring advanced real-time audio visualization.
-Download App here => https://drive.google.com/file/d/1HmAZHtmlm_o9QOxKDI5HPCrBbV6zphie/view?usp=sharing
+
 ---
 
 ## 🌟 Key Features
@@ -66,6 +66,6 @@ To compile and run this application locally, follow these steps:
 Developed by **AvotraAder**
 - **GitHub**: [@AvotraAder](https://github.com/AvotraAder)
 - **Email**: andriniainaavotraader@gmail.com
-
+  Download App here => https://drive.google.com/file/d/1HmAZHtmlm_o9QOxKDI5HPCrBbV6zphie/view?usp=sharing
 ---
 *If you find this project helpful, don't forget to give it a ⭐!*
