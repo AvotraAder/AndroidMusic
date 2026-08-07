@@ -65,7 +65,8 @@ To compile and run this application locally, follow these steps:
 
 Developed by **AvotraAder**
 - **GitHub**: [@AvotraAder](https://github.com/AvotraAder)
-- **Email**: andriniainaavotraader@gmail.com
-  Download App here => https://drive.google.com/file/d/1HmAZHtmlm_o9QOxKDI5HPCrBbV6zphie/view?usp=sharing
+- **Email**: andriniainaavotraader@gmail.com 
+
+### Download App here ** => https://drive.google.com/file/d/1HmAZHtmlm_o9QOxKDI5HPCrBbV6zphie/view?usp=sharing
 ---
 *If you find this project helpful, don't forget to give it a ⭐!*
