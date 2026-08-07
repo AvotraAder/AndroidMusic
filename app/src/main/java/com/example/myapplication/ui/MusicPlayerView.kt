@@ -11,10 +11,7 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -862,7 +859,9 @@ fun NowPlayingDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding(),
             color = MaterialTheme.colorScheme.background
         ) {
             Column(
@@ -897,283 +896,217 @@ fun NowPlayingDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                     QueueView(player, currentLanguage, items) // Passed items
                 } else {
-                    Spacer(modifier = Modifier.height(48.dp))
-
-                    // Large Artwork Placeholder with Circular Visualizer
-                    Box(modifier = Modifier.size(320.dp), contentAlignment = Alignment.Center) {
-                        // Rotation animation for the circular icon and visualizer
-                        val infiniteTransition = rememberInfiniteTransition(label = "rotation")
-                        val rotation by infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(15000, easing = LinearEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rotation"
-                        )
-
-                        Surface(
-                            modifier = Modifier
-                                .size(240.dp)
-                                .graphicsLayer {
-                                    rotationZ = if (isPlaying) rotation else 0f
-                                },
-                            shape = CircleShape, // Perfectly round
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            tonalElevation = 8.dp,
-                            border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                if (item.type == MediaType.AUDIO && item.albumArtUri != null) {
-                                    AsyncImage(
-                                        model = item.albumArtUri,
-                                        contentDescription = null,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop,
-                                        error = rememberVectorPainter(Icons.Default.MusicNote)
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = if (item.type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(100.dp),
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                                    )
-                                }
-                            }
-                        }
-
-                        // Move visualizer after surface to be in front
-                        CircularVisualizer(
-                            isPlaying = isPlaying,
-                            visualizerData = visualizerData,
-                            rotation = if (isPlaying) rotation else 0f,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(48.dp))
-
-                    Text(
-                        text = item.title,
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "${item.artist} • ${item.album}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    // Progress Bar
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxSize(),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Visualiseur de Basses style "Papillon" (Bowtie) centré
-                        BassVisualizer(
-                            isPlaying = isPlaying, 
-                            volume = volume,
-                            visualizerData = visualizerData,
+                        // Artwork section - flexible weight to adapt to any screen height
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.6f) // 60% width
-                                .height(40.dp)
-                                .padding(bottom = 8.dp)
-                        )
-
-                        BoxWithConstraints(
-                            modifier = Modifier
-                                .fillMaxWidth() // Back to full width for seek bar
-                                .height(24.dp)
-                                .pointerInput(duration) {
-                                    if (duration > 0) {
-                                        detectDragGestures { change, _ ->
-                                            change.consume()
-                                            val width = size.width.toFloat()
-                                            val newValue = (change.position.x / width).coerceIn(0f, 1f)
-                                            val seekTo = (newValue * duration).toLong()
-                                            player.seekTo(seekTo)
-                                            currentPos = seekTo
-                                        }
-                                    }
-                                }
-                                .pointerInput(duration) {
-                                    if (duration > 0) {
-                                        detectTapGestures { offset ->
-                                            val width = size.width.toFloat()
-                                            val newValue = (offset.x / width).coerceIn(0f, 1f)
-                                            val seekTo = (newValue * duration).toLong()
-                                            player.seekTo(seekTo)
-                                            currentPos = seekTo
-                                        }
-                                    }
-                                },
-                            contentAlignment = Alignment.CenterStart
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
                         ) {
-                            val progress = if (duration > 0) currentPos.toFloat() / duration else 0f
-                            
-                            // Background track
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(4.dp)
-                                    .background(Color.Gray.copy(alpha = 0.1f), CircleShape)
-                            )
-                            // Active progress level
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(progress)
-                                    .height(4.dp)
-                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-                            )
-                            // Thumb indicator
-                            Box(
-                                modifier = Modifier
-                                    .offset(x = (maxWidth * progress) - 6.dp)
-                                    .size(12.dp)
-                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(text = formatTime(currentPos), style = MaterialTheme.typography.labelSmall)
-                            Text(text = formatTime(duration), style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
+                            BoxWithConstraints(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                // Calculate responsive size: 80% of the smallest dimension
+                                val responsiveSize = (minOf(maxWidth, maxHeight) * 0.8f)
+                                
+                                Box(modifier = Modifier.size(responsiveSize), contentAlignment = Alignment.Center) {
+                                    val infiniteTransition = rememberInfiniteTransition(label = "rotation")
+                                    val rotation by infiniteTransition.animateFloat(
+                                        initialValue = 0f,
+                                        targetValue = 360f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(15000, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Restart
+                                        ),
+                                        label = "rotation"
+                                    )
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Main Controls
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onCycleMode) {
-                            val icon = when {
-                                shuffleMode -> Icons.Default.Shuffle
-                                repeatMode == Player.REPEAT_MODE_ALL -> Icons.Default.Repeat
-                                repeatMode == Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
-                                else -> Icons.Default.Repeat
-                            }
-                            Icon(
-                                imageVector = icon, 
-                                contentDescription = "Mode",
-                                tint = if (shuffleMode || repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else LocalContentColor.current
-                            )
-                        }
-                        
-                        IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", modifier = Modifier.size(48.dp))
-                        }
-
-                        FloatingActionButton(
-                            onClick = { if (player.isPlaying) player.pause() else player.play() },
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            shape = MaterialTheme.shapes.extraLarge,
-                            modifier = Modifier.size(72.dp)
-                        ) {
-                            Icon(
-                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = "Play/Pause",
-                                modifier = Modifier.size(40.dp)
-                            )
-                        }
-
-                        IconButton(onClick = { player.seekToNext() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(48.dp))
-                        }
-
-                        Box(contentAlignment = Alignment.BottomCenter) {
-                            IconButton(onClick = { showVolumeControl = !showVolumeControl }) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.VolumeUp,
-                                    contentDescription = "Volume",
-                                    tint = if (showVolumeControl) MaterialTheme.colorScheme.primary else LocalContentColor.current
-                                )
-                            }
-                            
-                            if (showVolumeControl) {
-                                Popup(
-                                    alignment = Alignment.TopCenter,
-                                    offset = IntOffset(0, -50),
-                                    onDismissRequest = { showVolumeControl = false }
-                                ) {
                                     Surface(
                                         modifier = Modifier
-                                            .height(200.dp)
-                                            .width(32.dp),
-                                        shape = MaterialTheme.shapes.extraLarge,
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
-                                        tonalElevation = 6.dp
+                                            .size(responsiveSize * 0.75f)
+                                            .graphicsLayer { rotationZ = if (isPlaying) rotation else 0f },
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        tonalElevation = 8.dp,
+                                        border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
                                     ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            modifier = Modifier.padding(vertical = 12.dp)
-                                        ) {
-                                            Text(
-                                                text = "${(volume * 100).toInt()}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                            
-                                            Spacer(modifier = Modifier.height(8.dp))
+                                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            if (item.type == MediaType.AUDIO && item.albumArtUri != null) {
+                                                AsyncImage(
+                                                    model = item.albumArtUri,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.fillMaxSize(),
+                                                    contentScale = ContentScale.Crop,
+                                                    error = rememberVectorPainter(Icons.Default.MusicNote)
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = if (item.type == MediaType.VIDEO) Icons.Default.Movie else Icons.Default.MusicNote,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(responsiveSize * 0.3f),
+                                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                        }
+                                    }
 
-                                            Box(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .fillMaxWidth()
-                                                    .pointerInput(Unit) {
-                                                        detectDragGestures { change, _ ->
-                                                            change.consume()
-                                                            val height = size.height.toFloat()
-                                                            val newValue = (1f - (change.position.y / height)).coerceIn(0f, 1f)
-                                                            onVolumeChange(newValue)
-                                                        }
-                                                    },
-                                                contentAlignment = Alignment.BottomCenter
-                                            ) {
-                                                // Background track
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxHeight()
-                                                        .width(4.dp)
-                                                        .background(Color.Gray.copy(alpha = 0.1f), CircleShape)
-                                                )
-                                                // Active volume level
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxHeight(volume)
-                                                        .width(4.dp)
-                                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
-                                                )
-                                                // Thumb indicator
-                                                Box(
-                                                    modifier = Modifier
-                                                        .align(Alignment.BottomCenter)
-                                                        .offset(y = (- (volume * 140)).dp) // Approximation for thumb pos
-                                                        .size(12.dp)
-                                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
-                                                )
+                                    CircularVisualizer(
+                                        isPlaying = isPlaying,
+                                        visualizerData = visualizerData,
+                                        rotation = if (isPlaying) rotation else 0f,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                            }
+                        }
+
+                        // Info Section - fixed height based on content
+                        Column(
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${item.artist} • ${item.album}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Progress & Controls Section - Stays at the bottom
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            BassVisualizer(
+                                isPlaying = isPlaying, 
+                                volume = volume,
+                                visualizerData = visualizerData,
+                                modifier = Modifier
+                                    .fillMaxWidth(0.5f)
+                                    .height(32.dp)
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            BoxWithConstraints(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(24.dp)
+                                    .pointerInput(duration) {
+                                        if (duration > 0) {
+                                            detectDragGestures { change, _ ->
+                                                change.consume()
+                                                val width = size.width.toFloat()
+                                                val newValue = (change.position.x / width).coerceIn(0f, 1f)
+                                                val seekTo = (newValue * duration).toLong()
+                                                player.seekTo(seekTo)
+                                                currentPos = seekTo
+                                            }
+                                        }
+                                    }
+                                    .pointerInput(duration) {
+                                        if (duration > 0) {
+                                            detectTapGestures { offset ->
+                                                val width = size.width.toFloat()
+                                                val newValue = (offset.x / width).coerceIn(0f, 1f)
+                                                val seekTo = (newValue * duration).toLong()
+                                                player.seekTo(seekTo)
+                                                currentPos = seekTo
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                val progress = if (duration > 0) currentPos.toFloat() / duration else 0f
+                                Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.Gray.copy(alpha = 0.1f), CircleShape))
+                                Box(modifier = Modifier.fillMaxWidth(progress).height(4.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+                                Box(modifier = Modifier.offset(x = (maxWidth * progress) - 6.dp).size(12.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+                            }
+                            
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(text = formatTime(currentPos), style = MaterialTheme.typography.labelSmall)
+                                Text(text = formatTime(duration), style = MaterialTheme.typography.labelSmall)
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // Main Controls
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(onClick = onCycleMode) {
+                                    val icon = when {
+                                        shuffleMode -> Icons.Default.Shuffle
+                                        repeatMode == Player.REPEAT_MODE_ALL -> Icons.Default.Repeat
+                                        repeatMode == Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
+                                        else -> Icons.Default.Repeat
+                                    }
+                                    Icon(imageVector = icon, contentDescription = "Mode", tint = if (shuffleMode || repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                                }
+                                
+                                IconButton(onClick = { player.seekToPrevious() }, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", modifier = Modifier.size(48.dp))
+                                }
+
+                                FloatingActionButton(
+                                    onClick = { if (player.isPlaying) player.pause() else player.play() },
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    shape = MaterialTheme.shapes.extraLarge,
+                                    modifier = Modifier.size(64.dp)
+                                ) {
+                                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", modifier = Modifier.size(36.dp))
+                                }
+
+                                IconButton(onClick = { player.seekToNext() }, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(48.dp))
+                                }
+
+                                Box(contentAlignment = Alignment.BottomCenter) {
+                                    IconButton(onClick = { showVolumeControl = !showVolumeControl }) {
+                                        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Volume", tint = if (showVolumeControl) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                                    }
+                                    
+                                    if (showVolumeControl) {
+                                        Popup(alignment = Alignment.TopCenter, offset = IntOffset(0, -50), onDismissRequest = { showVolumeControl = false }) {
+                                            Surface(modifier = Modifier.height(160.dp).width(32.dp), shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f), tonalElevation = 6.dp) {
+                                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 12.dp)) {
+                                                    Text(text = "${(volume * 100).toInt()}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Box(modifier = Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) { detectDragGestures { change, _ -> change.consume(); val height = size.height.toFloat(); onVolumeChange((1f - (change.position.y / height)).coerceIn(0f, 1f)) } }, contentAlignment = Alignment.BottomCenter) {
+                                                        Box(modifier = Modifier.fillMaxHeight().width(4.dp).background(Color.Gray.copy(alpha = 0.1f), CircleShape))
+                                                        Box(modifier = Modifier.fillMaxHeight(volume).width(4.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
@@ -1634,6 +1567,7 @@ fun AdvancedBottomPlayer(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp)
+            .navigationBarsPadding()
             .height(72.dp) // Smaller height
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
