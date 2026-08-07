@@ -637,6 +637,10 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                         }
                     }
                     
+                    // Apply modes BEFORE queue changes to ensure player is in correct state
+                    player.repeatMode = nextRepeat
+                    player.shuffleModeEnabled = nextShuffle
+
                     if (nextShuffle && !shuffleMode) {
                         shuffleQueuePhysical(player)
                     } else if (!nextShuffle && shuffleMode) {
@@ -646,13 +650,11 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                         val currentIdx = if (currentUri != null) items.indexOfFirst { it.uri == currentUri } else -1
                         
                         if (currentIdx != -1) {
-                            player.setMediaItems(media3Items, false)
-                            player.seekTo(currentIdx, player.currentPosition)
+                            val currentPosMs = player.currentPosition
+                            player.setMediaItems(media3Items, currentIdx, currentPosMs)
                         }
                     }
 
-                    player.shuffleModeEnabled = nextShuffle
-                    player.repeatMode = nextRepeat
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 },
                 onClick = { showNowPlaying = true }
@@ -690,6 +692,10 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                     }
                 }
                 
+                // Apply modes BEFORE queue changes
+                player.repeatMode = nextRepeat
+                player.shuffleModeEnabled = nextShuffle
+
                 if (nextShuffle && !shuffleMode) {
                     shuffleQueuePhysical(player)
                 } else if (!nextShuffle && shuffleMode) {
@@ -697,13 +703,11 @@ fun MediaList(items: List<MediaItem>, type: MediaType, emptyText: String, player
                     val currentUri = player.currentMediaItem?.localConfiguration?.uri
                     val currentIdx = if (currentUri != null) items.indexOfFirst { it.uri == currentUri } else -1
                     if (currentIdx != -1) {
-                        player.setMediaItems(media3Items, false)
-                        player.seekTo(currentIdx, player.currentPosition)
+                        val currentPosMs = player.currentPosition
+                        player.setMediaItems(media3Items, currentIdx, currentPosMs)
                     }
                 }
 
-                player.shuffleModeEnabled = nextShuffle
-                player.repeatMode = nextRepeat
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             },
             items = items, // Added items
@@ -1179,12 +1183,18 @@ class QueueAdapter(
             }
 
             root.setOnClickListener {
-                player.seekTo(holder.bindingAdapterPosition, 0L)
-                player.play()
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    player.seekTo(pos, 0L)
+                    player.play()
+                }
             }
 
             btnRemove.setOnClickListener {
-                player.removeMediaItem(holder.bindingAdapterPosition)
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) {
+                    player.removeMediaItem(pos)
+                }
             }
             
             btnRemove.visibility = if (isCurrent) View.GONE else View.VISIBLE
@@ -1200,10 +1210,16 @@ class QueueAdapter(
     }
 
     fun moveItem(fromPos: Int, toPos: Int) {
-        if (fromPos == toPos) return
-        Collections.swap(items, fromPos, toPos)
-        player.moveMediaItem(fromPos, toPos)
-        notifyItemMoved(fromPos, toPos)
+        val count = items.size
+        if (fromPos < 0 || fromPos >= count || toPos < 0 || toPos >= count || fromPos == toPos) return
+        
+        try {
+            Collections.swap(items, fromPos, toPos)
+            player.moveMediaItem(fromPos, toPos)
+            notifyItemMoved(fromPos, toPos)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
     
     fun onDragReleased() {
@@ -1217,8 +1233,14 @@ class QueueTouchCallback(private val adapter: QueueAdapter) : ItemTouchHelper.Si
     ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0
 ) {
     override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
-        adapter.moveItem(vh.bindingAdapterPosition, target.bindingAdapterPosition)
-        return true
+        val fromPos = vh.bindingAdapterPosition
+        val toPos = target.bindingAdapterPosition
+        
+        if (fromPos != RecyclerView.NO_POSITION && toPos != RecyclerView.NO_POSITION) {
+            adapter.moveItem(fromPos, toPos)
+            return true
+        }
+        return false
     }
     
     override fun onSwiped(vh: RecyclerView.ViewHolder, dir: Int) {}
@@ -1316,58 +1338,6 @@ fun QueueView(player: Player, currentLanguage: String, libraryItems: List<MediaI
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
-            
-            // Playback Mode Button in Queue
-            IconButton(onClick = {
-                val shuffleMode = player.shuffleModeEnabled
-                val repeatMode = player.repeatMode
-                
-                val (nextShuffle, nextRepeat, msg) = when {
-                    !shuffleMode && repeatMode == Player.REPEAT_MODE_OFF -> {
-                        Triple(true, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Aléatoire" else "Shuffle Mode")
-                    }
-                    shuffleMode -> {
-                        Triple(false, Player.REPEAT_MODE_ALL, if (currentLanguage == "FR") "Tout répéter" else "Loop All")
-                    }
-                    repeatMode == Player.REPEAT_MODE_ALL -> {
-                        Triple(false, Player.REPEAT_MODE_ONE, if (currentLanguage == "FR") "Répéter un titre" else "Repeat One")
-                    }
-                    else -> {
-                        Triple(false, Player.REPEAT_MODE_OFF, if (currentLanguage == "FR") "Mode Normal" else "Normal Mode")
-                    }
-                }
-                
-                if (nextShuffle && !shuffleMode) {
-                    shuffleQueuePhysical(player)
-                } else if (!nextShuffle && shuffleMode) {
-                    // Restore library order
-                    val media3Items = libraryItems.map { createMedia3Item(it) }
-                    val currentUri = player.currentMediaItem?.localConfiguration?.uri
-                    val currentIdx = if (currentUri != null) libraryItems.indexOfFirst { it.uri == currentUri } else -1
-                    if (currentIdx != -1) {
-                        player.setMediaItems(media3Items, false)
-                        player.seekTo(currentIdx, player.currentPosition)
-                    }
-                }
-
-                player.shuffleModeEnabled = nextShuffle
-                player.repeatMode = nextRepeat
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-            }) {
-                val shuffleMode = player.shuffleModeEnabled
-                val repeatMode = player.repeatMode
-                val icon = when {
-                    shuffleMode -> Icons.Default.Shuffle
-                    repeatMode == Player.REPEAT_MODE_ALL -> Icons.Default.Repeat
-                    repeatMode == Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
-                    else -> Icons.Default.Repeat
-                }
-                Icon(
-                    imageVector = icon, 
-                    contentDescription = "Mode",
-                    tint = if (shuffleMode || repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else LocalContentColor.current
-                )
-            }
         }
         
         AndroidView(
@@ -1801,8 +1771,8 @@ fun shuffleQueuePhysical(player: Player) {
         list.shuffle()
         list.add(currentIdx, currentItem)
         
-        // Use setMediaItems with resetPosition = false for seamless update
-        player.setMediaItems(list, false)
-        // No seekTo needed if item and index remain the same
+        // Use setMediaItems with the current index and position for atomic update
+        val currentPosition = player.currentPosition
+        player.setMediaItems(list, currentIdx, currentPosition)
     }
 }

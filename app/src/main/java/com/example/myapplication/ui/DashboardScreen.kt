@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
@@ -181,14 +182,24 @@ fun DashboardScreen(
             }
         ) { padding ->
             Box(modifier = Modifier.padding(padding)) {
+                // Keep MusicPlayerView alive even when not visible to maintain MediaController connection.
+                // This prevents the brief audio stutter when switching back to the music tab.
+                Box(modifier = Modifier.fillMaxSize().graphicsLayer { 
+                    alpha = if (currentMenuKey == "music") 1f else 0f 
+                    // Move off-screen when not active to prevent interaction
+                    translationX = if (currentMenuKey == "music") 0f else 10000f
+                }) {
+                    MusicPlayerView(currentLanguage, onMediaStart, onMediaProgress)
+                }
+
                 when (currentMenuKey) {
                     "home" -> HomeView(user.username, t, userDao)
                     "profile" -> ProfileEditView(user.username, t, onUpdate = { newName, newPwd -> 
                         onUpdateProfile(newName, newPwd)
                     })
-                    "music" -> MusicPlayerView(currentLanguage, onMediaStart, onMediaProgress)
                     "help" -> InfoView(t["help"]!!, t["help_content"]!!)
                     "contact" -> InfoView(t["contact"]!!, t["contact_content"]!!)
+                    "music" -> { /* Handled above for persistence */ }
                 }
             }
         }
