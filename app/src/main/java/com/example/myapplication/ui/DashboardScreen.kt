@@ -68,7 +68,26 @@ fun DashboardScreen(
             "note_username" to "Note: Le nom d'utilisateur ne peut pas être modifié.",
             "new_password" to "Nouveau mot de passe",
             "save" to "Sauvegarder les modifications",
-            "help_content" to "Besoin d'aide ? Consultez notre documentation ou contactez le support.",
+            "help_content" to """
+                Bienvenue dans votre guide d'utilisation !
+
+                1. Navigation
+                Utilisez le menu latéral (icône ☰) pour basculer entre la Musique, vos Statistiques et votre Profil.
+
+                2. Lecteur de Musique
+                - Play/Pause : Utilisez le bouton central pour contrôler la lecture.
+                - Modes de lecture : Cliquez sur l'icône de flèches pour basculer entre Normal, Aléatoire (Shuffle) et Répétition (Loop).
+                - File d'attente : Cliquez sur l'icône de liste pour voir et réorganiser vos morceaux à venir par glisser-déposer.
+                - Recherche : Utilisez la barre de recherche en haut pour trouver vos titres ou artistes préférés.
+
+                3. Statistiques
+                Consultez l'onglet Statistiques pour voir votre temps total d'écoute, vos musiques préférées et vos artistes les plus écoutés.
+
+                4. Profil et Thème
+                - Modifiez votre mot de passe dans l'onglet Profil.
+                - Basculez entre le mode Clair et Sombre via l'icône de soleil/lune en haut à droite.
+                - Changez la langue (FR/EN) via l'icône de globe.
+            """.trimIndent(),
             "contact_content" to "Email: andriniainaavotraader@gmail.com\nTéléphone: +261 33 79 210 96\nGitHub: https://github.com/AvotraAder"
         )
     } else {
@@ -89,7 +108,26 @@ fun DashboardScreen(
             "note_username" to "Note: Username cannot be changed.",
             "new_password" to "New password",
             "save" to "Save changes",
-            "help_content" to "Need help? Check our documentation or contact support.",
+            "help_content" to """
+                Welcome to your User Guide!
+
+                1. Navigation
+                Use the sidebar menu (☰ icon) to switch between Music, Statistics, and your Profile.
+
+                2. Music Player
+                - Play/Pause: Use the central button to control playback.
+                - Playback Modes: Click the arrow icon to toggle between Normal, Shuffle, and Loop modes.
+                - Queue: Click the list icon to see and reorder your upcoming songs via drag-and-drop.
+                - Search: Use the search bar at the top to find your favorite tracks or artists.
+
+                3. Statistics
+                Check the Statistics tab to view your total listening time, top tracks, and most played artists.
+
+                4. Profile & Theme
+                - Change your password in the Profile tab.
+                - Toggle between Light and Dark mode using the sun/moon icon at the top right.
+                - Switch language (EN/FR) via the globe icon.
+            """.trimIndent(),
             "contact_content" to "Email: andriniainaavotraader@gmail.com\nPhone: +261 33 79 210 96\nGitHub: https://github.com/AvotraAder"
         )
     }
@@ -436,9 +474,32 @@ fun ProfileEditView(currentUsername: String, t: Map<String, String>, onUpdate: (
 
 @Composable
 fun InfoView(title: String, content: String) {
-    Column(modifier = Modifier.padding(16.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(content)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+    ) {
+        Text(
+            text = title, 
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+            )
+        ) {
+            Text(
+                text = content,
+                modifier = Modifier.padding(20.dp),
+                style = MaterialTheme.typography.bodyLarge,
+                lineHeight = 24.sp
+            )
+        }
     }
 }
